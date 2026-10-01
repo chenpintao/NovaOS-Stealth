@@ -18,6 +18,7 @@ import re
 import signal
 import socket
 import struct
+import subprocess
 import threading
 import time
 from email.utils import formatdate as http_date
@@ -158,16 +159,44 @@ def local_ip():
     return ip
 
 
+HOTSPOT_PREFIXES = ("192.168.137.", "192.168.43.", "172.20.10.")
+_hotspot_cache = {"ip": None, "ts": 0}
+
+
+def hotspot_ip():
+    """检测 Windows 移动热点虚拟网卡（192.168.137.x / 43.x / 172.20.10.x）。
+    设备连电脑热点后，该地址就是它们的网关 + DNS，必须用它应答劫持域名。"""
+    now = time.time()
+    if now - _hotspot_cache["ts"] < 1:
+        return _hotspot_cache["ip"]
+    ip = None
+    try:
+        out = subprocess.run(["ipconfig"], capture_output=True, timeout=5,
+                             text=True, errors="ignore").stdout
+        for m in re.findall(r"(?:IPv4|IPv4 地址)[^\d:]*:\s*(\d+\.\d+\.\d+\.\d+)", out):
+            if m.startswith(HOTSPOT_PREFIXES):
+                ip = m
+                break
+    except Exception:
+        pass
+    _hotspot_cache.update(ip=ip, ts=now)
+    return ip
+
+
 def answer_ip():
     v = str(cfg("answer_ip", "auto"))
     if v and v != "auto":
         return v
+    # 热点模式优先：哪怕电脑默认出口走 WLAN，也要应答热点网关
+    hip = hotspot_ip()
+    if hip:
+        return hip
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("223.5.5.5", 53))
         ip = s.getsockname()[0]
         s.close()
-        if ip.startswith(("192.168.137.", "192.168.43.", "172.20.10.")):
+        if ip.startswith(HOTSPOT_PREFIXES):
             return ip
     except Exception:
         pass
@@ -263,16 +292,42 @@ class DNSThread(threading.Thread):
         self.sock = None
 
     def run(self):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # 热点模式：必须精确绑定热点网卡 IP。
+        # Windows 移动热点的 ICS 服务会占住 0.0.0.0:53，
+        # 只有更具体的地址（192.168.137.1）才能优先截获设备发来的查询。
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self.sock.bind(("0.0.0.0", 53))
-        except OSError as e:
-            print("[DNS] 绑定 0.0.0.0:53 失败（需要管理员权限）：%s" % e)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        except OSError:
+            pass
+        bound_ip = None
+        # 热点开启后网卡 IP（192.168.137.1）要几秒才就绪。
+        # 先等它并精确绑定（唯一能稳定压过 ICS 通配绑定的方式）；
+        # 12 秒内热点网卡没出现（/nohotspot 或纯局域网模式）再退回通配。
+        for _ in range(6):
+            hip = hotspot_ip()
+            if hip:
+                try:
+                    sock.bind((hip, 53))
+                    bound_ip = hip
+                    break
+                except OSError:
+                    break
+            time.sleep(2)
+        if not bound_ip:
+            try:
+                sock.bind(("0.0.0.0", 53))
+                bound_ip = "0.0.0.0"
+            except OSError:
+                pass
+        if not bound_ip:
+            print("[DNS] 绑定 53 端口失败（被占用或无可用网卡，需管理员权限）")
+            sock.close()
             return
+        self.sock = sock
         self.sock.settimeout(2)
         self.running = True
-        print("[DNS] 已启动 0.0.0.0:53，劫持域名 -> %s" % answer_ip())
+        print("[DNS] 已启动 %s:53，劫持域名 -> %s" % (bound_ip, answer_ip()))
         while self.running:
             try:
                 data, addr = self.sock.recvfrom(1024)
@@ -552,6 +607,7 @@ def create_admin_app():
         root = novaos_dir()
         return jsonify({
             "local_ip": local_ip(),
+            "hotspot_ip": hotspot_ip(),
             "answer_ip": answer_ip(),
             "novaos_dir": root,
             "index_exists": os.path.isfile(os.path.join(root, "index.html")),

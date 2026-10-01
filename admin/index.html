@@ -167,7 +167,8 @@ async function load(){
   const [cfg,st]=await Promise.all([fetch("/api/config").then(r=>r.json()),fetch("/api/status").then(r=>r.json())]);
   fill(cfg);
   el("status").innerHTML =
-    `本机 IP：<code>${st.local_ip}</code>　劫持应答：<code>${st.answer_ip}</code><br>`+
+    `本机 IP：<code>${st.local_ip}</code>　劫持应答：<code>${st.answer_ip}</code>`+
+    (st.hotspot_ip?`　<span class="ok">热点网关 ${st.hotspot_ip} ✓</span>`:``)+`<br>`+
     `NovaOS 目录：<code>${st.novaos_dir}</code> ${st.index_exists?'<span class="ok">✓ index.html</span>':'<span class="err">✗ 缺少 index.html</span>'}　`+
     `${st.loader_exists?'<span class="ok">✓ loader.js</span>':'<span class="err">✗ 缺少 loader.js</span>'}<br>`+
     `挂载地址：<code>${st.mount_url}</code><br>`+
