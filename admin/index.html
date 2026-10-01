@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NovaOS 注入配置</title>
+<style>
+  :root{--bg:#0f1115;--card:#181b22;--line:#262b36;--fg:#e8eaef;--sub:#9aa3b2;--ac:#4f8cff;--ok:#34c759;--err:#ff5a5f;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 "Segoe UI","Microsoft YaHei",sans-serif}
+  .wrap{max-width:860px;margin:0 auto;padding:20px 16px 80px}
+  h1{font-size:20px;margin:10px 0 2px}
+  .tip{color:var(--sub);font-size:13px;margin-bottom:18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:16px}
+  .card h2{font-size:15px;margin:0 0 14px;display:flex;align-items:center;gap:8px}
+  .row{display:grid;grid-template-columns:170px 1fr;gap:10px 14px;align-items:center;margin-bottom:11px}
+  .row label{color:var(--sub)}
+  .req::after{content:" *";color:var(--err)}
+  input[type=text],input[type=number],select{width:100%;background:#10131a;border:1px solid var(--line);color:var(--fg);
+    border-radius:8px;padding:8px 10px;font-size:13px;outline:none}
+  input:focus,select:focus{border-color:var(--ac)}
+  input[type=checkbox]{width:16px;height:16px;accent-color:var(--ac)}
+  .hint{color:var(--sub);font-size:12px;margin:-4px 0 10px 184px}
+  .inline{display:flex;gap:18px;flex-wrap:wrap}
+  .inline label{display:flex;gap:6px;align-items:center;color:var(--fg)}
+  .bar{position:fixed;left:0;right:0;bottom:0;background:#12151c;border-top:1px solid var(--line);padding:12px 16px;
+    display:flex;gap:12px;align-items:center;justify-content:center;z-index:9}
+  button{background:var(--ac);color:#fff;border:0;border-radius:9px;padding:9px 22px;font-size:14px;cursor:pointer}
+  button.ghost{background:#262b36}
+  #msg{font-size:13px}
+  .ok{color:var(--ok)} .err{color:var(--err)}
+  .fld-err{border-color:var(--err)!important}
+  .errmsg{color:var(--err);font-size:12px;grid-column:2;display:none}
+  .tags{width:100%;background:#10131a;border:1px solid var(--line);border-radius:8px;padding:8px;color:var(--fg);font-size:13px}
+  code{background:#10131a;padding:1px 6px;border-radius:5px;color:#a8c4ff}
+  .status{font-size:13px;color:var(--sub);line-height:2}
+  .badge{font-size:11px;padding:1px 7px;border-radius:20px;border:1px solid var(--line);color:var(--sub)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>NovaOS 隐蔽注入配置</h1>
+  <div class="tip">修改后点“保存”，平板刷新专栏页面即生效；DNS/端口类设置需重启服务。</div>
+
+  <div class="card">
+    <h2>运行状态</h2>
+    <div class="status" id="status">加载中...</div>
+  </div>
+
+  <div class="card">
+    <h2>注入与挂载</h2>
+    <div class="row"><label class="req">启用注入</label>
+      <div><input type="checkbox" id="inject_enable"></div></div>
+    <div class="row"><label class="req">注入匹配路径</label>
+      <input type="text" id="inject_path_pattern" data-r="1"></div>
+    <div class="hint">平台每次必载的 manifest 文件前缀，通常无需改。</div>
+    <div class="row"><label class="req">NovaOS 服务域名</label>
+      <input type="text" id="serve_host" data-r="1"></div>
+    <div class="hint">iframe 使用该域名加载 NovaOS（与专栏页跨域，存储/DOM 完全隔离），须在 DNS 劫持列表内。</div>
+    <div class="row"><label class="req">挂载路径</label>
+      <input type="text" id="mount" data-r="1"></div>
+    <div class="hint">形如 <code>/__nova__/</code>，斜杠包裹；改掉即换“入口暗号地址”。</div>
+    <div class="row"><label class="req">NovaOS 目录</label>
+      <input type="text" id="novaos_dir" data-r="1"></div>
+    <div class="row"><label>去除 Google 统计</label>
+      <div><input type="checkbox" id="strip_ga"></div></div>
+    <div class="row"><label>缓存投毒（离线持久化）</label>
+      <div><input type="checkbox" id="cache_poison"></div></div>
+    <div class="hint">开启后劫持期间访问一次即可把注入器与 NovaOS 全部写入浏览器长期缓存；之后断开 DNS 劫持，OS 仍能唤起使用。业务数据接口不会被缓存。</div>
+  </div>
+
+  <div class="card">
+    <h2>隐蔽唤起方式</h2>
+
+    <h2 style="margin-top:4px;font-size:13px;color:var(--sub)">① 键盘热键（电脑端）</h2>
+    <div class="row"><label>启用热键</label><div><input type="checkbox" id="trigger_hotkey_enable"></div></div>
+    <div class="row"><label class="req">按键</label><input type="text" id="trigger_hotkey_key" maxlength="4"></div>
+    <div class="hint">单个按键，如 <code>y</code>、<code>o</code>、<code>F2</code>。</div>
+    <div class="row"><label>组合键</label>
+      <div class="inline">
+        <label><input type="checkbox" id="trigger_hotkey_ctrl"> Ctrl</label>
+        <label><input type="checkbox" id="trigger_hotkey_shift"> Shift</label>
+        <label><input type="checkbox" id="trigger_hotkey_alt"> Alt</label>
+      </div></div>
+
+    <h2 style="margin-top:14px;font-size:13px;color:var(--sub)">② 角落连点（手机端主入口）</h2>
+    <div class="row"><label>启用角落连点</label><div><input type="checkbox" id="trigger_tap_enable"></div></div>
+    <div class="row"><label>角落位置</label>
+      <select id="trigger_tap_corner">
+        <option value="top-left">左上角</option><option value="top-right">右上角</option>
+        <option value="bottom-left">左下角</option><option value="bottom-right">右下角</option>
+      </select></div>
+    <div class="row"><label class="req">连点次数</label><input type="number" id="trigger_tap_count" min="1" max="9"></div>
+    <div class="hint">范围 1–9 次。</div>
+    <div class="row"><label class="req">感应半径(px)</label><input type="number" id="trigger_tap_radius" min="8" max="64"></div>
+    <div class="hint">范围 8–64 px，越小越不影响页面正常点击。</div>
+    <div class="row"><label class="req">有效间隔(ms)</label><input type="number" id="trigger_tap_interval_ms" min="300" max="5000" step="100"></div>
+    <div class="hint">范围 300–5000 ms，全部连点需在此时间内完成。</div>
+
+    <h2 style="margin-top:14px;font-size:13px;color:var(--sub)">③ 网址暗参（收藏夹直达）</h2>
+    <div class="row"><label>启用暗参</label><div><input type="checkbox" id="trigger_urlparam_enable"></div></div>
+    <div class="row"><label class="req">参数名 / 值</label>
+      <div style="display:flex;gap:8px">
+        <input type="text" id="trigger_urlparam_name" style="flex:1">
+        <input type="text" id="trigger_urlparam_value" style="width:110px">
+      </div></div>
+    <div class="hint">专栏网址末尾追加 <code>&amp;_o=1</code> 打开即自动唤起。</div>
+
+    <h2 style="margin-top:14px;font-size:13px;color:var(--sub)">④ 关闭行为</h2>
+    <div class="row"><label>再次触发时</label>
+      <select id="exit_action">
+        <option value="hide">仅隐藏（秒开，系统状态保留）</option>
+        <option value="close">彻底关闭（下次重新启动 NovaOS）</option>
+      </select></div>
+  </div>
+
+  <div class="card">
+    <h2>服务与 DNS</h2>
+    <div class="row"><label class="req">HTTP 端口</label><input type="number" id="http_port" min="1" max="65535"></div>
+    <div class="row"><label class="req">管理界面端口</label><input type="number" id="admin_port" min="1" max="65535"></div>
+    <div class="row"><label>启用 DNS 劫持</label><div><input type="checkbox" id="dns_enable"></div></div>
+    <div class="row"><label class="req">劫持域名(每行一个)</label>
+      <textarea class="tags" id="hijack_domains" rows="4"></textarea></div>
+    <div class="row"><label class="req">上游 DNS(每行一个)</label>
+      <textarea class="tags" id="dns_upstreams" rows="2"></textarea></div>
+    <div class="hint">非劫持域名全部转发上游，不影响其他网站。</div>
+    <div class="row"><label>应答 IP</label><input type="text" id="answer_ip"></div>
+    <div class="hint"><code>auto</code> 表示自动选择本机/热点网段 IP。</div>
+  </div>
+</div>
+
+<div class="bar">
+  <button id="save">保存配置</button>
+  <button class="ghost" id="reload">重新读取</button>
+  <span id="msg"></span>
+</div>
+
+<script>
+const NUM = {trigger_tap_count:1,trigger_tap_radius:1,trigger_tap_interval_ms:1,http_port:1,admin_port:1};
+function el(id){return document.getElementById(id);}
+const IDS = ["inject_enable","inject_path_pattern","serve_host","mount","novaos_dir","strip_ga","cache_poison",
+  "trigger_hotkey_enable","trigger_hotkey_key","trigger_hotkey_ctrl","trigger_hotkey_shift","trigger_hotkey_alt",
+  "trigger_tap_enable","trigger_tap_corner","trigger_tap_count","trigger_tap_radius","trigger_tap_interval_ms",
+  "trigger_urlparam_enable","trigger_urlparam_name","trigger_urlparam_value","exit_action",
+  "http_port","admin_port","dns_enable","hijack_domains","dns_upstreams","answer_ip","debug"];
+
+function box(id){const e=el(id);return e.type==="checkbox"?e.checked:e.value;}
+function fill(c){
+  IDS.forEach(id=>{const e=el(id);
+    if(e.type==="checkbox")e.checked=!!c[id];
+    else if(e.tagName==="TEXTAREA")e.value=Array.isArray(c[id])?c[id].join("\n"):"";
+    else if(e.value!==undefined)e.value=c[id]===undefined?"":c[id];
+  });
+}
+function collect(){
+  const c={};
+  IDS.forEach(id=>{
+    const e=el(id);let v;
+    if(e.type==="checkbox")v=e.checked;
+    else if(e.tagName==="TEXTAREA")v=e.value.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+    else v=NUM[id]?parseInt(e.value,10):e.value.trim();
+    c[id]=v;
+  });
+  return c;
+}
+async function load(){
+  const [cfg,st]=await Promise.all([fetch("/api/config").then(r=>r.json()),fetch("/api/status").then(r=>r.json())]);
+  fill(cfg);
+  el("status").innerHTML =
+    `本机 IP：<code>${st.local_ip}</code>　劫持应答：<code>${st.answer_ip}</code><br>`+
+    `NovaOS 目录：<code>${st.novaos_dir}</code> ${st.index_exists?'<span class="ok">✓ index.html</span>':'<span class="err">✗ 缺少 index.html</span>'}　`+
+    `${st.loader_exists?'<span class="ok">✓ loader.js</span>':'<span class="err">✗ 缺少 loader.js</span>'}<br>`+
+    `挂载地址：<code>${st.mount_url}</code><br>`+
+    `CDN 真实 IP（防回环解析）：<code>${(st.dns_resolve_sample||[]).join(", ")||"解析失败"}</code>`;
+}
+el("save").onclick=async()=>{
+  document.querySelectorAll(".fld-err").forEach(e=>e.classList.remove("fld-err"));
+  const msg=el("msg");msg.textContent="保存中...";msg.className="";
+  const r=await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(collect())});
+  const d=await r.json();
+  if(d.ok){msg.textContent="✓ 已保存，刷新平板页面后生效";msg.className="ok";}
+  else{msg.textContent="保存失败，请检查标红项";msg.className="err";
+    Object.entries(d.errors||{}).forEach(([k,v])=>{const e=el(k);if(e){e.classList.add("fld-err");}});
+    console.warn(d.errors);}
+};
+el("reload").onclick=load;
+load();
+</script>
+</body>
+</html>

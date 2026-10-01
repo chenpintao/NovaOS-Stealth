@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.log
+e2e_profile/
+shot_*.png
+config.json.tmp
+.novabak

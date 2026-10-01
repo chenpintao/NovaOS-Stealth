@@ -1,0 +1,46 @@
+{
+  "_说明": "NovaOS 隐蔽注入配置。在管理界面 http://127.0.0.1:8899/ 修改保存即可，一般无需手编。",
+
+  "debug": false,
+
+  "inject_enable": true,
+  "inject_path_pattern": "/static/js/manifest.build.",
+  "serve_scheme": "http",
+  "serve_host": "web-alicdn.zyai.cc",
+  "mount": "/__nova__/",
+  "novaos_dir": "./novaos",
+  "strip_ga": true,
+  "cache_poison": true,
+
+  "http_port": 80,
+  "admin_port": 8899,
+
+  "dns_enable": true,
+  "dns_upstreams": ["223.5.5.5", "1.1.1.1"],
+  "answer_ip": "auto",
+  "hijack_domains": ["web-alicdn.zyai.cc", "sxz.school.zykj.org", "sxzbh.school.zykj.org", "web.alicdn.zykj.org"],
+  "host_routes": {
+    "web-alicdn.zyai.cc": "http://web-alicdn.zyai.cc",
+    "sxz.school.zykj.org": "http://sxz.school.zykj.org",
+    "sxzbh.school.zykj.org": "http://sxzbh.school.zykj.org",
+    "web.alicdn.zykj.org": "http://web.alicdn.zykj.org"
+  },
+
+  "trigger_hotkey_enable": true,
+  "trigger_hotkey_key": "y",
+  "trigger_hotkey_ctrl": true,
+  "trigger_hotkey_shift": true,
+  "trigger_hotkey_alt": false,
+
+  "trigger_tap_enable": true,
+  "trigger_tap_corner": "top-left",
+  "trigger_tap_count": 5,
+  "trigger_tap_radius": 20,
+  "trigger_tap_interval_ms": 1500,
+
+  "trigger_urlparam_enable": true,
+  "trigger_urlparam_name": "_o",
+  "trigger_urlparam_value": "1",
+
+  "exit_action": "hide"
+}
