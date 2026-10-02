@@ -98,7 +98,7 @@ self.Utils = Utils; // export for iOS 14- qwq
       if (!fn) throw new SyntaxError('Missing family name');
       // const i0 = /[^\w ]/.exec(fn);
       // if (i0) throw new SyntaxError(`Invalid character '${i0[0]}' at position ${i0.index}`);
-      const sarr = ['Google', 'Baomitu', 'Local'];
+      const sarr = ['Self', 'Google', 'Baomitu', 'Local'];
       return new Promise((resolve, reject) => {
         let index = sarr.length;
         const err = new DOMException('The requested font families are not available.', 'Missing font family');
@@ -135,6 +135,19 @@ self.Utils = Utils; // export for iOS 14- qwq
       const w1 = wn.toLocaleLowerCase();
       // const d0 = str => `@font-face{font-family:'${fn}';font-style:${s1};font-weight:${w1};${str}}`; // declaration
       switch (from) {
+        case 'Self': {
+          // Tzy OS 自托管：劫持环境下平板访问不了 fonts.googleapis.com / baomitu，
+          // 系统里也未必装了对应族名；直接随包提供 woff2，离线也能过字体检查。
+          const files = {
+            'titillium-web': 'titillium-web-regular.woff2',
+            'noto-sans-sc': 'noto-sans-sc-regular.woff2',
+            'material-icons': 'MaterialIcons-Regular.woff2'
+          };
+          const file = files[f1];
+          if (!file) return [];
+          // FontFace 的 URL 相对文档（index.html 所在目录）解析，须带 utils/
+          return [new FontFace(alt, `url('./utils/fonts/${file}')format('woff2')`)];
+        }
         case 'Google': {
           const u0 = `//fonts.googleapis.com/css?family=${f3}:${w1}${s1 === 'italic' ? 'i' : ''}`;
           // const u1 = `//fonts.googleapis.com/css2?family=${f3}&display=swap`;

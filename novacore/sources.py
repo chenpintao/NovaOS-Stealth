@@ -314,10 +314,23 @@ def api_smb(method):
 
 
 def wan_reachable():
-    """探测电脑自身外网是否通（平板据此判断能否借本机网络访问外网）。"""
-    for host, port in (("223.5.5.5", 443), ("119.29.29.29", 53)):
+    """探测电脑自身外网是否通（平板据此判断能否借本机网络访问外网）。
+    先用真实 HTTP(S) 请求判定（最贴近"能否代取外网"），再退 TCP 直连：
+    部分网络封 TCP 53/对特定 IP 的 443，但正常网站访问一切正常。"""
+    for url in ("https://www.baidu.com", "https://www.qq.com",
+                "http://connect.rom.miui.com/generate_204"):
         try:
-            s = socket.create_connection((host, port), timeout=1.5)
+            r = requests.get(url, timeout=2.5, allow_redirects=True,
+                             verify=False, stream=True)
+            r.close()
+            if r.status_code < 500:
+                return True
+        except Exception:
+            continue
+    for host, port in (("223.5.5.5", 443), ("119.29.29.29", 443),
+                       ("223.5.5.5", 53), ("119.29.29.29", 53)):
+        try:
+            s = socket.create_connection((host, port), timeout=2)
             s.close()
             return True
         except Exception:

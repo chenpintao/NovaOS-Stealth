@@ -55,16 +55,37 @@ CHROME_CANDIDATES = [
 ]
 
 
+def _chrome_major_version(exe):
+    """直接读 PE 文件版本（Win32 API），绝不启动浏览器进程。
+    早期用 `chrome.exe --version` 探测：Windows 上当默认配置 Chrome 已在运行时，
+    该命令会唤起一个可见的真实浏览器窗口（且 stdout 可能为空）。"""
+    try:
+        import ctypes
+        size = ctypes.windll.version.GetFileVersionInfoSizeW(exe, None)
+        if not size:
+            return 0
+        buf = ctypes.create_string_buffer(size)
+        dummy = ctypes.c_void_p()
+        if not ctypes.windll.version.GetFileVersionInfoW(exe, 0, size, buf):
+            return 0
+        ptr = ctypes.c_void_p()
+        ln = ctypes.c_uint()
+        # 根块 "\\" 即 VS_FIXEDFILEINFO
+        if not ctypes.windll.version.VerQueryValueW(
+                buf, "\\", ctypes.byref(ptr), ctypes.byref(ln)) or not ln.value:
+            return 0
+        # VS_FIXEDFILEINFO.dwFileVersionMS 在偏移 8
+        ms = ctypes.c_uint.from_address(ptr.value + 8).value
+        return (ms >> 16) & 0xFFFF
+    except Exception:
+        return 0
+
+
 def _headless_flag(exe):
     """Chrome >=112 支持 --headless=new，更早版本须用旧式 --headless，
-    否则会被忽略而弹出可见窗口。"""
-    try:
-        info = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=10)
-        m = re.search(r"(\d+)", info.stdout or "")
-        major = int(m.group(1)) if m else 0
-        return "--headless=new" if major >= 112 else "--headless"
-    except Exception:
-        return "--headless=new"
+    否则参数被忽略而弹出可见窗口。版本读文件属性，不启动进程。"""
+    major = _chrome_major_version(exe)
+    return "--headless=new" if major and major >= 112 else "--headless"
 
 
 class CDPSession(object):
@@ -79,6 +100,7 @@ class CDPSession(object):
         self._send_lock = threading.Lock()
         self._subs = []           # list[queue.Queue]，有界丢旧帧
         self._subs_lock = threading.Lock()
+        self._start_lock = threading.Lock()   # 防止 nav/stream 并发时启动两个 Chrome
         self._reader = None
         self.W = CDP_DEFAULT_WIDTH
         self.H = CDP_DEFAULT_HEIGHT
@@ -87,6 +109,14 @@ class CDPSession(object):
     def start(self):
         if self.running:
             return True, "已在运行"
+        # nav 与 stream 会在平板打开应用瞬间同时触发 start：加锁 + 锁内复查，
+        # 避免两个线程用同一 user-data-dir 各启一个 Chrome 互抢 profile/端口。
+        with self._start_lock:
+            if self.running:
+                return True, "已在运行"
+            return self._start_locked()
+
+    def _start_locked(self):
         if websocket is None:
             return False, "缺少 websocket-client（pip install websocket-client）"
         exe = None

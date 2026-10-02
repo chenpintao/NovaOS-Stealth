@@ -60,7 +60,10 @@ def main():
         print(" 平板接入      : 与电脑同一局域网，浏览器直接打开上方地址")
     else:
         print(" 运行模式      : 热点 DNS 劫持")
-        print(" 劫持应答 IP   : %s" % answer_ip())
+        if str(cfg("answer_ip", "auto")) == "auto":
+            print(" 劫持应答 IP   : 自动（热点模式优先应答热点网关，如 192.168.137.1）")
+        else:
+            print(" 劫持应答 IP   : %s" % answer_ip())
         print(" 平板接入      : DNS 指向本机后，正常打开“在线专栏”")
     sk = str(cfg("trigger_search_keyword", "")) if cfg("trigger_search_enable", True) else ""
     print(" 隐蔽唤起      : 搜索框输入 %s / 角落连点 / Ctrl+Shift+Y / 网址暗参 _o=1" % (sk or "(未启用)"))
