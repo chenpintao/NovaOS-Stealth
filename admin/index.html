@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>NovaOS 注入配置</title>
+<title>Tzy OS 注入配置</title>
 <style>
   :root{--bg:#0f1115;--card:#181b22;--line:#262b36;--fg:#e8eaef;--sub:#9aa3b2;--ac:#4f8cff;--ok:#34c759;--err:#ff5a5f;}
   *{box-sizing:border-box}
@@ -39,7 +39,7 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>NovaOS 隐蔽注入配置</h1>
+  <h1>Tzy OS 隐蔽注入配置</h1>
   <div class="tip">修改后点“保存”，平板刷新专栏页面即生效；DNS/端口类设置需重启服务。</div>
 
   <div class="card">
@@ -54,19 +54,22 @@
     <div class="row"><label class="req">注入匹配路径</label>
       <input type="text" id="inject_path_pattern" data-r="1"></div>
     <div class="hint">平台每次必载的 manifest 文件前缀，通常无需改。</div>
-    <div class="row"><label class="req">NovaOS 服务域名</label>
+    <div class="row"><label class="req">Tzy OS 服务域名</label>
       <input type="text" id="serve_host" data-r="1"></div>
-    <div class="hint">iframe 使用该域名加载 NovaOS（与专栏页跨域，存储/DOM 完全隔离），须在 DNS 劫持列表内。</div>
+    <div class="hint">iframe 使用该域名加载 Tzy OS（与专栏页跨域，存储/DOM 完全隔离），须在 DNS 劫持列表内。</div>
     <div class="row"><label class="req">挂载路径</label>
       <input type="text" id="mount" data-r="1"></div>
     <div class="hint">形如 <code>/__nova__/</code>，斜杠包裹；改掉即换“入口暗号地址”。</div>
-    <div class="row"><label class="req">NovaOS 目录</label>
+    <div class="row"><label class="req">Tzy OS 目录</label>
       <input type="text" id="novaos_dir" data-r="1"></div>
+    <div class="row"><label>本地文件根目录</label>
+      <input type="text" id="fs_root"></div>
+    <div class="hint">「本地文件」应用的访问边界，如 <code>D:/</code>；留空则默认用户主目录，越界访问一律拒绝。</div>
     <div class="row"><label>去除 Google 统计</label>
       <div><input type="checkbox" id="strip_ga"></div></div>
     <div class="row"><label>缓存投毒（离线持久化）</label>
       <div><input type="checkbox" id="cache_poison"></div></div>
-    <div class="hint">开启后劫持期间访问一次即可把注入器与 NovaOS 全部写入浏览器长期缓存；之后断开 DNS 劫持，OS 仍能唤起使用。业务数据接口不会被缓存。</div>
+    <div class="hint">开启后劫持期间访问一次即可把注入器与 Tzy OS 全部写入浏览器长期缓存；之后断开 DNS 劫持，OS 仍能唤起使用。业务数据接口不会被缓存。</div>
   </div>
 
   <div class="card">
@@ -106,11 +109,16 @@
       </div></div>
     <div class="hint">专栏网址末尾追加 <code>&amp;_o=1</code> 打开即自动唤起。</div>
 
-    <h2 style="margin-top:14px;font-size:13px;color:var(--sub)">④ 关闭行为</h2>
+    <h2 style="margin-top:14px;font-size:13px;color:var(--sub)">④ 搜索框口令（手机推荐）</h2>
+    <div class="row"><label>启用搜索框口令</label><div><input type="checkbox" id="trigger_search_enable"></div></div>
+    <div class="row"><label class="req">唤起口令</label><input type="text" id="trigger_search_keyword" style="flex:1"></div>
+    <div class="hint">在专栏页任意搜索框/输入框中输入口令即唤起（输入后自动清空，不会真的搜索）；桌面端不聚焦输入框直接敲口令同样有效。</div>
+
+    <h2 style="margin-top:14px;font-size:13px;color:var(--sub)">⑤ 关闭行为</h2>
     <div class="row"><label>再次触发时</label>
       <select id="exit_action">
         <option value="hide">仅隐藏（秒开，系统状态保留）</option>
-        <option value="close">彻底关闭（下次重新启动 NovaOS）</option>
+        <option value="close">彻底关闭（下次重新启动 Tzy OS）</option>
       </select></div>
   </div>
 
@@ -118,6 +126,11 @@
     <h2>服务与 DNS</h2>
     <div class="row"><label class="req">HTTP 端口</label><input type="number" id="http_port" min="1" max="65535"></div>
     <div class="row"><label class="req">管理界面端口</label><input type="number" id="admin_port" min="1" max="65535"></div>
+    <h2 style="margin-top:10px;font-size:13px;color:var(--sub)">远程浏览器（CDP 画面代理）</h2>
+    <div class="row"><label>画面宽(px)</label><input type="number" id="cdp_width" min="640" max="3840"></div>
+    <div class="row"><label>画面高(px)</label><input type="number" id="cdp_height" min="480" max="2160"></div>
+    <div class="row"><label>JPEG 画质</label><input type="number" id="cdp_quality" min="10" max="100"></div>
+    <div class="hint">范围：宽 640–3840、高 480–2160、画质 10–100。画质越高越清晰但越费带宽；保存后需在远程浏览器里重新启动（关闭再打开应用）生效。</div>
     <div class="row"><label>启用 DNS 劫持</label><div><input type="checkbox" id="dns_enable"></div></div>
     <div class="row"><label class="req">劫持域名(每行一个)</label>
       <textarea class="tags" id="hijack_domains" rows="4"></textarea></div>
@@ -132,17 +145,30 @@
 <div class="bar">
   <button id="save">保存配置</button>
   <button class="ghost" id="reload">重新读取</button>
+  <button class="ghost" id="sysUpdate" type="button">更新系统（刷新版本号）</button>
+  <button class="ghost" id="sysBackup" type="button">打包备份下载</button>
   <span id="msg"></span>
 </div>
 
+<details style="margin:10px 14px 18px">
+  <summary style="cursor:pointer;color:var(--sub);font-size:13px">设备访问记录（排查平板唤起/加载失败）</summary>
+  <div style="margin:8px 0">
+    <button class="ghost" id="logRefresh" type="button">刷新记录</button>
+    <span style="font-size:12px;color:var(--sub)">重点看平板 UA 的 <code>/__nova__/index.html</code> 是否 200、随后资源是否有 404/502</span>
+  </div>
+  <pre id="logBox" style="background:#0f1115;color:#c8d0dc;font-size:11px;line-height:1.5;max-height:300px;overflow:auto;padding:10px;border-radius:8px;white-space:pre-wrap;word-break:break-all">暂无记录</pre>
+</details>
+
 <script>
-const NUM = {trigger_tap_count:1,trigger_tap_radius:1,trigger_tap_interval_ms:1,http_port:1,admin_port:1};
+const NUM = {trigger_tap_count:1,trigger_tap_radius:1,trigger_tap_interval_ms:1,http_port:1,admin_port:1,cdp_width:1,cdp_height:1,cdp_quality:1};
 function el(id){return document.getElementById(id);}
-const IDS = ["inject_enable","inject_path_pattern","serve_host","mount","novaos_dir","strip_ga","cache_poison",
+const IDS = ["inject_enable","inject_path_pattern","serve_host","mount","novaos_dir","fs_root","strip_ga","cache_poison",
   "trigger_hotkey_enable","trigger_hotkey_key","trigger_hotkey_ctrl","trigger_hotkey_shift","trigger_hotkey_alt",
   "trigger_tap_enable","trigger_tap_corner","trigger_tap_count","trigger_tap_radius","trigger_tap_interval_ms",
-  "trigger_urlparam_enable","trigger_urlparam_name","trigger_urlparam_value","exit_action",
-  "http_port","admin_port","dns_enable","hijack_domains","dns_upstreams","answer_ip","debug"];
+  "trigger_urlparam_enable","trigger_urlparam_name","trigger_urlparam_value",
+  "trigger_search_enable","trigger_search_keyword","exit_action",
+  "http_port","admin_port","cdp_width","cdp_height","cdp_quality",
+  "dns_enable","hijack_domains","dns_upstreams","answer_ip","debug"];
 
 function box(id){const e=el(id);return e.type==="checkbox"?e.checked:e.value;}
 function fill(c){
@@ -169,7 +195,7 @@ async function load(){
   el("status").innerHTML =
     `本机 IP：<code>${st.local_ip}</code>　劫持应答：<code>${st.answer_ip}</code>`+
     (st.hotspot_ip?`　<span class="ok">热点网关 ${st.hotspot_ip} ✓</span>`:``)+`<br>`+
-    `NovaOS 目录：<code>${st.novaos_dir}</code> ${st.index_exists?'<span class="ok">✓ index.html</span>':'<span class="err">✗ 缺少 index.html</span>'}　`+
+    `Tzy OS 目录：<code>${st.novaos_dir}</code> ${st.index_exists?'<span class="ok">✓ index.html</span>':'<span class="err">✗ 缺少 index.html</span>'}　`+
     `${st.loader_exists?'<span class="ok">✓ loader.js</span>':'<span class="err">✗ 缺少 loader.js</span>'}<br>`+
     `挂载地址：<code>${st.mount_url}</code><br>`+
     `CDN 真实 IP（防回环解析）：<code>${(st.dns_resolve_sample||[]).join(", ")||"解析失败"}</code>`;
@@ -185,6 +211,22 @@ el("save").onclick=async()=>{
     console.warn(d.errors);}
 };
 el("reload").onclick=load;
+el("sysUpdate").onclick=async()=>{
+  const msg=el("msg");msg.textContent="正在刷新版本号...";msg.className="";
+  try{
+    const d=await fetch("/api/update",{method:"POST"}).then(r=>r.json());
+    if(d.ok){msg.textContent="✓ 已更新 "+(d.changed||[]).length+" 处引用，平板下次打开即生效";msg.className="ok";}
+    else{msg.textContent="更新失败："+((d.errors||[]).join(";")||"未知");msg.className="err";}
+  }catch(e){msg.textContent="更新失败："+e;msg.className="err";}
+};
+el("sysBackup").onclick=()=>{ location.href="/api/backup"; };
+el("logRefresh").onclick=async()=>{
+  const box=el("logBox"); box.textContent="加载中...";
+  try{
+    const r=await fetch("/api/access_log?n=120").then(r=>r.json());
+    box.textContent=(r.lines&&r.lines.length)?r.lines.reverse().join("\n"):"暂无记录";
+  }catch(e){ box.textContent="读取失败："+e; }
+};
 load();
 </script>
 </body>

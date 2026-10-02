@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Tzy OS</title>
+<!-- 极简网页 OS · Loshop & Cpt -->
+<!-- nova.html：新入口（旧 os.html 已被缓存投毒一年不回源，故换新名零清缓存升级） -->
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="os.css?v=1790944872">
+</head>
+<body>
+
+<!-- ============ 锁屏 ============ -->
+<div id="nv-lock" class="nv-lock">
+  <div class="nv-lock-inner">
+    <div id="nv-clock" class="nv-clock">00:00</div>
+    <div id="nv-date" class="nv-date">----年--月--日</div>
+
+    <!-- 无 PIN：点击任意处进入 -->
+    <div id="nv-enter-hint" class="nv-enter-hint">轻触进入</div>
+
+    <!-- 有 PIN：数字键盘 -->
+    <div id="nv-pin-panel" class="nv-pin-panel">
+      <div id="nv-pin-dots" class="nv-pin-dots"><i></i><i></i><i></i><i></i></div>
+      <div class="nv-pin-tip" id="nv-pin-tip">请输入锁屏密码</div>
+      <div class="nv-pad">
+        <button class="nv-key" data-k="1">1</button>
+        <button class="nv-key" data-k="2">2</button>
+        <button class="nv-key" data-k="3">3</button>
+        <button class="nv-key" data-k="4">4</button>
+        <button class="nv-key" data-k="5">5</button>
+        <button class="nv-key" data-k="6">6</button>
+        <button class="nv-key" data-k="7">7</button>
+        <button class="nv-key" data-k="8">8</button>
+        <button class="nv-key" data-k="9">9</button>
+        <button class="nv-key nv-key-fn" data-k="set">设密码</button>
+        <button class="nv-key" data-k="0">0</button>
+        <button class="nv-key nv-key-fn" data-k="del">删除</button>
+      </div>
+    </div>
+  </div>
+  <div class="nv-lock-foot">Tzy OS&nbsp;&nbsp;Loshop &amp; Cpt</div>
+</div>
+
+<!-- ============ 桌面 ============ -->
+<div id="nv-desktop" class="nv-desktop nv-hidden">
+  <!-- 顶部状态栏 -->
+  <div class="nv-statusbar">
+    <span class="nv-sb-title">Tzy OS</span>
+    <span class="nv-sb-spacer"></span>
+    <span id="nv-sb-net" class="nv-sb-dot offline" title="探测中…"></span>
+    <span id="nv-sb-clock"></span>
+    <button id="nv-sb-home" class="nv-sb-btn" title="显示桌面">桌</button>
+    <button id="nv-sb-task" class="nv-sb-btn" title="任务">任</button>
+    <button id="nv-sb-lock" class="nv-sb-btn" title="锁屏">锁</button>
+    <button id="nv-sb-back" class="nv-sb-btn" title="返回专栏">退</button>
+  </div>
+
+  <!-- 应用图标网格 -->
+  <div id="nv-icons" class="nv-icons"></div>
+
+  <!-- Dock：运行中应用 -->
+  <div class="nv-dock-wrap">
+    <div id="nv-dock" class="nv-dock"></div>
+  </div>
+</div>
+
+<!-- ============ 通用轻提示 ============ -->
+<div id="nv-toast" class="nv-toast nv-hidden"></div>
+
+<!-- WinBox（纯本地依赖，bundle 内含样式） -->
+<script src="lib/winbox.bundle.min.js"></script>
+<!-- OS 核心 -->
+<script src="os.js?v=1790944872"></script>
+<!-- 应用（注册即上桌面；?v=2 为破缓存版本号） -->
+<script src="apps/editor.js?v=1790944873"></script>
+<script src="apps/files.js?v=1790944873"></script>
+<script src="apps/calc.js?v=1790944873"></script>
+<script src="apps/settings.js?v=1790944874"></script>
+<script src="apps/media.js?v=1790944874"></script>
+<script src="apps/phi.js?v=1790944874"></script>
+<script src="apps/vbrowser.js?v=1790944875"></script>
+<script>/* 启动 */ window.OS && window.OS.boot();</script>
+</body>
+</html>

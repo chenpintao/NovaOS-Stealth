@@ -114,7 +114,7 @@ async function showloginmod() {
 					}
 					if (isdefaultpass) {
 						gid('loginmod').close();
-						gid('edison').showModal();
+						showEdison();
 						startup();
 					} else {
 						console.log("Password check failed: ", isdefaultpass);
@@ -187,8 +187,16 @@ function closeElementedis(element) {
 	}, 200);
 }
 
+function showEdison() {
+	// 必须幂等：Chrome 99（华为平板系统 WebView）对已 open 的 <dialog>
+	// 再调 showModal() 会抛 InvalidStateError，曾导致新建用户后启动链中断、
+	// 永久卡在启动画面。
+	const d = gid("edison");
+	if (d && !d.open) d.showModal();
+}
+
 async function startup() {
-	gid("edison").showModal();
+	showEdison();
 	gid('loginmod').close();
 	if (badlaunch) { return }
 	lethalpasswordtimes = false;
@@ -936,9 +944,14 @@ async function cleanupInvalidAssociations() {
 	let registry = await getSetting('full', "AppRegistry.json");
 
 	for (let key in registry) {
-		if (!await window.parent.getFileNameByID(key)) {
-			window.parent.remSettingKey(key, "AppRegistry.json")
-			continue;
+		try {
+			if (!await getFileNameByID(key)) {
+				remSettingKey(key, "AppRegistry.json")
+				continue;
+			}
+		} catch (e) {
+			// Chrome 99 closed-shadow iframe 下 window.parent 访问被拦，
+			// 且 getFileNameByID 对无效 key 也可能抛异常，静默继续。
 		}
 	}
 }
@@ -1260,7 +1273,7 @@ async function initializeOS() {
 }
 async function installdefaultapps() {
 	nonotif = true;
-	gid("edison").showModal();
+	showEdison();
 	if (gid('startupterms')) {
 		gid('startupterms').innerText = "Just a moment...";
 	}
@@ -1985,7 +1998,7 @@ async function cleanupram() {
 	handlers = {};
 }
 async function setandinitnewuser() {
-	gid("edison").showModal()
+	showEdison()
 	await cleanupram();
 	CurrentUsername = await ask("Enter a username:", "");
 	await initializeOS();

@@ -1,5 +1,5 @@
 @echo off
-title NovaOS stealth injection service (PC hotspot mode)
+title Tzy OS stealth injection service (PC hotspot mode)
 
 rem ================= Hotspot config (password must be >= 8 chars) =================
 set "HOTSPOT_SSID=Hack Hotspot"
@@ -58,7 +58,12 @@ if "%NO_HOTSPOT%"=="0" (
 
 echo [4/4] Starting DNS + HTTP injection service...
 echo ============================================================
-python server.py
+rem Prefer Nuitka single-file build; fall back to python source.
+if exist "dist\novaosd.exe" (
+    "dist\novaosd.exe"
+) else (
+    python novaosd.py
+)
 echo.
 echo Service stopped. Run stop-hotspot.bat to turn off the PC hotspot.
 pause

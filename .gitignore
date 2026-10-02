@@ -1,7 +1,10 @@
 __pycache__/
 *.pyc
 *.log
+logs/
 e2e_profile/
 shot_*.png
 config.json.tmp
 .novabak
+dist/
+build-dist/

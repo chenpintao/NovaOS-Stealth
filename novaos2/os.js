@@ -1,0 +1,1313 @@
+/* ============================================================
+ * Tzy OS · 核心 os.js
+ * 锁屏 → 桌面图标网格 + Dock → WinBox 窗口 → 应用注册 → 存储
+ *
+ * 约束：Chrome 99（华为平板）、HTTP 非安全源；
+ *      仅用 ES6（不使用 2022+ 语法）；存储只用 localStorage 明文。
+ * Loshop & Cpt
+ * ============================================================ */
+(function () {
+  "use strict";
+
+  /* ---------------- 存储封装（localStorage 明文） ---------------- */
+  var Store = {
+    get: function (key, def) {
+      try {
+        var v = localStorage.getItem(key);
+        return v === null ? def : JSON.parse(v);
+      } catch (e) { return def; }
+    },
+    set: function (key, val) {
+      try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) { }
+    },
+    remove: function (key) {
+      try { localStorage.removeItem(key); } catch (e) { }
+    }
+  };
+
+  /* ---------------- 极简事件总线（应用间联动，如 文件→编辑器） ---------------- */
+  var listeners = {};
+  function on(evt, fn) {
+    (listeners[evt] = listeners[evt] || []).push(fn);
+  }
+  function emit(evt, data) {
+    var arr = listeners[evt] || [];
+    for (var i = 0; i < arr.length; i++) {
+      try { arr[i](data); } catch (e) { }
+    }
+  }
+
+  /* ---------------- 轻提示 ---------------- */
+  var toastTimer = 0;
+  function toast(msg, ms) {
+    var el = document.getElementById("nv-toast");
+    if (!el) return;
+    el.textContent = msg;
+    el.classList.remove("nv-hidden");
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.classList.add("nv-hidden"); }, ms || 2200);
+  }
+
+  /* ---------------- DOM 辅助 ---------------- */
+  function h(tag, cls, text) {
+    var el = document.createElement(tag);
+    if (cls) el.className = cls;
+    if (text !== undefined && text !== null) el.textContent = text;
+    return el;
+  }
+  function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); }
+
+  /* ---------------- 模态对话框（替代原生 alert/confirm/prompt） ----------------
+   * 原生弹框在华为平板上样式突兀且会阻塞渲染；统一为纸风对话框，Promise 回传结果。
+   * 挂在 body 最外层（z-index 高于 WinBox 窗口）。 */
+  function dlgOpen(o) {
+    return new Promise(function (resolve) {
+      var mask = h("div", "nv-mask nv-modal-top");
+      var dlg = h("div", "nv-dialog");
+      if (o.title) dlg.appendChild(h("h3", "", o.title));
+      if (o.msg) {
+        var lines = String(o.msg).split("\n");
+        var box = h("div", "nv-dialog-msg");
+        lines.forEach(function (ln, i) {
+          if (i) box.appendChild(document.createElement("br"));
+          box.appendChild(document.createTextNode(ln));
+        });
+        dlg.appendChild(box);
+      }
+      var inp = null;
+      if (o.kind === "prompt") {
+        inp = document.createElement("input");
+        inp.className = "nv-input nv-dialog-input";
+        inp.value = o.value || "";
+        if (o.placeholder) inp.placeholder = o.placeholder;
+        dlg.appendChild(inp);
+      }
+      var actions = h("div", "nv-dialog-actions");
+      var done = false;
+      function finish(v) {
+        if (done) return;
+        done = true;
+        if (mask.parentNode) mask.parentNode.removeChild(mask);
+        resolve(v);
+      }
+      if (o.kind !== "alert") {
+        var bCancel = h("button", "nv-btn ghost", o.cancelText || "取消");
+        bCancel.addEventListener("click", function () { finish(o.kind === "confirm" ? false : null); });
+        actions.appendChild(bCancel);
+      }
+      var bOk = h("button", "nv-btn primary", o.okText || "确定");
+      bOk.addEventListener("click", function () {
+        finish(o.kind === "alert" ? true : (o.kind === "confirm" ? true : inp.value));
+      });
+      actions.appendChild(bOk);
+      dlg.appendChild(actions);
+      mask.appendChild(dlg);
+      mask.addEventListener("click", function (e) {
+        if (e.target === mask) finish(o.kind === "confirm" ? false : null);
+      });
+      document.body.appendChild(mask);
+      if (inp) {
+        setTimeout(function () {
+          try { inp.focus(); inp.select(); } catch (e) { }
+        }, 60);
+        inp.addEventListener("keydown", function (e) {
+          if (e.keyCode === 13 || e.key === "Enter") { e.preventDefault(); finish(inp.value); }
+          else if (e.keyCode === 27 || e.key === "Escape") { e.preventDefault(); finish(null); }
+        });
+      } else {
+        mask.addEventListener("keydown", function (e) {
+          if (e.keyCode === 27 || e.key === "Escape") {
+            finish(o.kind === "confirm" ? false : null);
+          }
+        });
+      }
+    });
+  }
+  var dlg = {
+    alert: function (msg, title) { return dlgOpen({ kind: "alert", msg: msg, title: title }); },
+    confirm: function (msg, title) { return dlgOpen({ kind: "confirm", msg: msg, title: title }); },
+    prompt: function (msg, value, title) {
+      return dlgOpen({ kind: "prompt", msg: msg, value: value, title: title });
+    }
+  };
+
+  /* ---------------- 界面设置（壁纸等，明文 localStorage） ---------------- */
+  var UI_KEY = "nova2.ui";
+  var WALLPAPERS = [
+    { id: 0, name: "墨" },
+    { id: 1, name: "青黛" },
+    { id: 2, name: "绛紫" },
+    { id: 3, name: "玄铁" }
+  ];
+  function uiGet() { return Store.get(UI_KEY, { wp: 0 }) || { wp: 0 }; }
+  function applyWallpaper(idx) {
+    var lock = document.getElementById("nv-lock");
+    var desk = document.getElementById("nv-desktop");
+    WALLPAPERS.forEach(function (w) {
+      if (lock) lock.classList.remove("nv-wp-" + w.id);
+      if (desk) desk.classList.remove("nv-wp-" + w.id);
+    });
+    if (lock) lock.classList.add("nv-wp-" + idx);
+    if (desk) desk.classList.add("nv-wp-" + idx);
+  }
+  var ui = {
+    wallpapers: function () { return WALLPAPERS.slice(); },
+    wallpaper: function () {
+      var n = uiGet().wp;
+      return WALLPAPERS[n] ? n : 0;
+    },
+    setWallpaper: function (idx) {
+      if (!WALLPAPERS[idx]) return;
+      var s = uiGet(); s.wp = idx; Store.set(UI_KEY, s);
+      applyWallpaper(idx);
+    }
+  };
+
+  /* ---------------- 网络层：同源 → 直连热点 IP，自动探测与故障转移 ----------------
+   * 劫持在：同源相对路径 api/... 即达 server.py。
+   * 断劫持：域名失效，但平板仍连着电脑热点 → 直连 http://192.168.137.1 挂载点
+   *         （跨域，服务端已开 CORS + 预检），FTP/SMB/外网代取全部继续可用。
+   * 完全离线（无热点/无服务）：探测失败返回 offline，界面降级到离线空间。 */
+  var MOUNT_PATH = (function () {
+    // 本页形如 /__nova__/nova.html，取最后一个斜杠前（含斜杠）作为挂载前缀
+    var p = location.pathname;
+    var i = p.lastIndexOf("/");
+    return i >= 0 ? p.slice(0, i + 1) : "/";
+  })();
+  var BASE_KEY = "nova2.apiBase";
+  var NET = { base: "", info: null, online: false, probing: null, waiters: [] };
+
+  function lanCandidates() {
+    var cfg = window.__NOVA_LAN__ || {};
+    var ips = [], seen = {};
+    function add(ip) {
+      ip = String(ip || "").trim();
+      if (ip && !seen[ip]) { seen[ip] = 1; ips.push(ip); }
+    }
+    add(cfg.hotspot);          // 热点网关（最优先）
+    add("192.168.137.1");      // Windows 移动热点固定网关
+    add(cfg.answer);
+    add(cfg.local);
+    var mount = cfg.mount || MOUNT_PATH;
+    return ips.map(function (ip) { return "http://" + ip + mount; });
+  }
+
+  function pingAt(base) {
+    return new Promise(function (resolve) {
+      var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+      var timer = setTimeout(function () { if (ctrl) { try { ctrl.abort(); } catch (e) { } } }, 2500);
+      fetch(base + "api/ping", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+        signal: ctrl ? ctrl.signal : undefined
+      }).then(function (r) { return r.json(); }).then(function (j) {
+        clearTimeout(timer);
+        resolve(j && j.ok ? { base: base, info: j } : null);
+      }).catch(function () { clearTimeout(timer); resolve(null); });
+    });
+  }
+
+  function netProbe(force) {
+    if (NET.base && !force) return Promise.resolve({ base: NET.base, info: NET.info });
+    if (NET.probing) return NET.probing;
+    NET.probing = (function () {
+      // 候选顺序：同源（劫持在）→ 上次成功的直连 → 注入 IP → 固定热点网段
+      var list = [""];
+      var saved = Store.get(BASE_KEY, "");
+      if (saved && list.indexOf(saved) < 0) list.push(saved);
+      lanCandidates().forEach(function (b) { if (list.indexOf(b) < 0) list.push(b); });
+
+      function next(i) {
+        if (i >= list.length) return Promise.resolve(null);
+        return pingAt(list[i]).then(function (res) { return res || next(i + 1); });
+      }
+      return next(0).then(function (res) {
+        NET.online = !!res;
+        if (res) {
+          NET.base = res.base;
+          NET.info = res.info;
+          Store.set(BASE_KEY, res.base);
+        }
+        NET.probing = null;
+        var ws = NET.waiters; NET.waiters = [];
+        ws.forEach(function (fn) { fn(res); });
+        netChanged();
+        return res;
+      });
+    })();
+    return NET.probing;
+  }
+
+  var OFFLINE = { ok: false, offline: true, error: "电脑服务不可用（离线模式）" };
+
+  // 探测结果变化时：刷新桌面网络灯，并通知应用（设置/文件管理可即时更新状态）
+  function netChanged() {
+    var dot = document.getElementById("nv-sb-net");
+    if (dot) {
+      var on = NET.online;
+      dot.className = "nv-sb-dot " + (on ? "online" : "offline");
+      var info = NET.info || {};
+      var where = on ? (NET.base === "" ? "同源（劫持通道）" : "热点直连 " + NET.base.replace(/^https?:\/\//, "").replace(/\/.*$/, "")) : "离线";
+      var wan = typeof info.wan === "boolean" ? (" · 电脑外网：" + (info.wan ? "通畅" : "不通")) : "";
+      dot.title = "电脑服务：" + where + wan;
+      dot.textContent = "";
+    }
+    try { emit("net-change", { base: NET.base, info: NET.info, offline: !NET.base }); } catch (e) { }
+  }
+
+  function rawCall(base, rel, body) {
+    return fetch(base + rel, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {})
+    }).then(function (r) {
+      // 业务成功/失败都返回 JSON；拿不到 JSON 说明打到的不是本机服务（劫持已断、
+      // 域名指向了真实服务器/网关拦截页），触发换地址重探。
+      return r.json().catch(function () { return null; });
+    }).catch(function () { return null; });
+  }
+
+  function netCall(rel, body, tries) {
+    var base = NET.base || "";
+    return rawCall(base, rel, body).then(function (j) {
+      if (j) return j;
+      if ((tries || 0) < 1) {
+        return netProbe(true).then(function (res) {
+          if (!res) return OFFLINE;
+          return netCall(rel, body, (tries || 0) + 1);
+        });
+      }
+      return OFFLINE;
+    });
+  }
+
+  // 走电脑网络代取外网（GET，返回原始 Blob）；断劫持直连 IP 时同样可用
+  function netGetWeb(url) {
+    function attempt(base, tries) {
+      return fetch(base + "api/web?u=" + encodeURIComponent(url)).then(function (r) {
+        if (r.status === 200) {
+          return Promise.all([r.blob(), r.headers.get("X-File-Name")]).then(function (a) {
+            return { ok: true, blob: a[0], name: a[1] };
+          });
+        }
+        return r.json().catch(function () { return null; }).then(function (j) {
+          if (j && j.error) return j;
+          return null;
+        });
+      }).catch(function () { return null; }).then(function (res) {
+        if (res) return res;
+        if (tries < 1) {
+          return netProbe(true).then(function (p) {
+            if (!p) return { ok: false, offline: true, error: "电脑服务不可用（离线模式）" };
+            return attempt(p.base, tries + 1);
+          });
+        }
+        return { ok: false, offline: true, error: "电脑服务不可用（离线模式）" };
+      });
+    }
+    var base = NET.base || "";
+    if (NET.base) return attempt(base, 0);
+    return netProbe(false).then(function (p) {
+      if (!p) return { ok: false, offline: true, error: "电脑服务不可用（离线模式）" };
+      return attempt(p.base, 0);
+    });
+  }
+
+  var api = {
+    fs: function (op, body) { return netCall("api/fs/" + op, body || {}); },
+    ftp: function (body) { return netCall("api/ftp", body); },
+    smb: function (body) { return netCall("api/smb", body); },
+    ping: function () { return netCall("api/ping", {}); },
+    // 系统维护（走挂载点同源端点，平板与电脑均可调用）
+    sysUpdate: function () { return netCall("sys/update", {}); },
+    sysBackupUrl: function () {
+      if (NET.base) return Promise.resolve(NET.base + "sys/backup");
+      return netProbe(false).then(function (p) { return p ? p.base + "sys/backup" : null; });
+    }
+  };
+
+  /* ---------------- 离线文件系统（IndexedDB VFS，内容以 Blob 存储） ----------------
+   * IDB 库 nova2：store meta 单条 {dirs, files:{path:{name,mime,size,mtime,kind}}}
+   *              store blobs：path -> Blob（文本为 UTF-8，二进制原样）
+   * 容量：浏览器配额通常数百 MB（navigator.storage.estimate 查询）。
+   * IDB 不可用时自动降级 localStorage（约 5MB，旧结构 nova2.vfs）。
+   * 方法契约不变，全部返回 Promise。 */
+  var VFS_KEY = "nova2.vfs";
+  var IDB_DB = "nova2";
+  function vfsNorm(p) {
+    p = String(p || "").replace(/\\/g, "/");
+    while (p.indexOf("//") >= 0) p = p.replace(/\/\//g, "/");
+    if (p.charAt(0) !== "/") p = "/" + p;
+    if (p.length > 1) p = p.replace(/\/+$/, "");
+    return p;
+  }
+  function vfsParent(p) {
+    var i = p.lastIndexOf("/");
+    return i <= 0 ? "" : p.slice(0, i);
+  }
+  function textBytes(s) {
+    try { return unescape(encodeURIComponent(s || "")).length; }
+    catch (e) { return (s || "").length; }
+  }
+  function vfsListEntries(t, dir) {
+    var prefix = dir === "" ? "/" : dir + "/";
+    var entries = [], seen = {};
+    for (var dk in t.dirs) {
+      if (dk === "" || dk === dir || dk.indexOf(prefix) !== 0) continue;
+      var rest = dk.slice(prefix.length);
+      if (rest && rest.indexOf("/") < 0 && !seen["d:" + rest]) {
+        seen["d:" + rest] = 1;
+        entries.push({ name: rest, dir: true, size: 0, mtime: 0 });
+      }
+    }
+    for (var fk in t.files) {
+      if (fk.indexOf(prefix) !== 0) continue;
+      var fr = fk.slice(prefix.length);
+      if (fr && fr.indexOf("/") < 0 && !seen["f:" + fr]) {
+        seen["f:" + fr] = 1;
+        var f = t.files[fk];
+        entries.push({ name: fr, dir: false, size: f.size || 0, mtime: f.mtime || 0 });
+      }
+    }
+    entries.sort(function (a, b) {
+      if (a.dir !== b.dir) return a.dir ? -1 : 1;
+      return a.name.toLowerCase() < b.name.toLowerCase() ? -1 : 1;
+    });
+    return entries;
+  }
+  function quotaError(err) {
+    var name = err && (err.name || (err.message || ""));
+    if (/quota/i.test(name)) return { ok: false, error: "离线空间已满（浏览器配额不足）" };
+    return { ok: false, error: "存储读写失败：" + (err && err.message ? err.message : name || "未知错误") };
+  }
+  function readBlobAs(blob, asText) {
+    return new Promise(function (resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function () {
+        if (asText) resolve(String(fr.result || ""));
+        else {
+          var s = String(fr.result || "");
+          var i = s.indexOf(",");
+          resolve(i >= 0 ? s.slice(i + 1) : "");
+        }
+      };
+      fr.onerror = function () { reject(new Error("读取文件内容失败")); };
+      if (asText) fr.readAsText(blob);
+      else fr.readAsDataURL(blob);
+    });
+  }
+
+  /* ---------- 引擎一：localStorage 降级实现（旧版结构，约 5MB） ---------- */
+  function vfsLoad() { return Store.get(VFS_KEY, null) || { dirs: { "": 1 }, files: {} }; }
+  function vfsSave(t) {
+    try { Store.set(VFS_KEY, t); return { ok: true }; }
+    catch (e) { return { ok: false, error: "离线空间已满（浏览器本地存储约 5MB 上限）" }; }
+  }
+  var legacyVfs = {
+    list: function (dir) {
+      dir = dir ? vfsNorm(dir) : "";
+      return Promise.resolve({ ok: true, path: dir, entries: vfsListEntries(vfsLoad(), dir) });
+    },
+    get: function (path) {
+      var f = vfsLoad().files[vfsNorm(path)];
+      return Promise.resolve(f ? { ok: true, text: f.text !== undefined && f.text !== null,
+        name: f.name, content: f.text, data: f.data, mime: f.mime }
+        : { ok: false, error: "文件不存在" });
+    },
+    put: function (path, rec) {
+      var t = vfsLoad();
+      path = vfsNorm(path);
+      var acc = "";
+      vfsParent(path).split("/").forEach(function (seg) {
+        if (!seg) return;
+        acc += "/" + seg;
+        t.dirs[acc] = 1;
+      });
+      var text = rec.text !== undefined && rec.text !== null ? String(rec.text) : null;
+      var data = rec.data || null;
+      t.files[path] = {
+        name: rec.name || path.split("/").pop(),
+        mime: rec.mime || "application/octet-stream",
+        text: text, data: data,
+        size: text !== null ? textBytes(text) : (data ? Math.floor(data.length * 3 / 4) : 0),
+        mtime: Date.now()
+      };
+      return Promise.resolve(vfsSave(t));
+    },
+    del: function (path) {
+      var t = vfsLoad();
+      path = vfsNorm(path);
+      if (t.files[path] !== undefined) { delete t.files[path]; }
+      else {
+        var prefix = path + "/";
+        for (var k in t.files) if (k.indexOf(prefix) === 0) { delete t.files[k]; }
+        for (var d in t.dirs) if (d === path || d.indexOf(prefix) === 0) { delete t.dirs[d]; }
+      }
+      return Promise.resolve(vfsSave(t));
+    },
+    mkdir: function (path) {
+      var t = vfsLoad();
+      path = vfsNorm(path);
+      var acc = "";
+      path.split("/").forEach(function (seg) {
+        if (!seg) return;
+        acc += "/" + seg;
+        t.dirs[acc] = 1;
+      });
+      return Promise.resolve(vfsSave(t));
+    },
+    usage: function () {
+      var t = vfsLoad();
+      var nFiles = 0, nDirs = 0, maxApprox = 5 * 1024 * 1024;
+      for (var k in t.files) nFiles++;
+      for (var d in t.dirs) if (d !== "") nDirs++;
+      return Promise.resolve({ ok: true, bytes: textBytes(JSON.stringify(t)),
+        files: nFiles, dirs: nDirs, max: maxApprox });
+    },
+    clear: function () { return Promise.resolve(vfsSave({ dirs: { "": 1 }, files: {} })); },
+    rename: function (oldPath, newPath) {
+      oldPath = vfsNorm(oldPath);
+      newPath = vfsNorm(newPath);
+      var t = vfsLoad();
+      if (t.files[oldPath] !== undefined) {
+        var rec = t.files[oldPath];
+        rec.name = newPath.split("/").pop();
+        rec.mtime = Date.now();
+        delete t.files[oldPath];
+        t.files[newPath] = rec;
+      } else {
+        var prefix = oldPath + "/", moved = false;
+        for (var k in t.files) {
+          if (k === oldPath || k.indexOf(prefix) === 0) {
+            var nk = newPath + k.slice(oldPath.length);
+            t.files[nk] = t.files[k];
+            t.files[nk].name = nk.split("/").pop();
+            delete t.files[k];
+            moved = true;
+          }
+        }
+        for (var d in t.dirs) {
+          if (d === oldPath || d.indexOf(prefix) === 0) {
+            var nd = newPath + d.slice(oldPath.length);
+            delete t.dirs[d];
+            t.dirs[nd] = 1;
+            moved = true;
+          }
+        }
+        if (!moved) return Promise.resolve({ ok: false, error: "路径不存在" });
+      }
+      return Promise.resolve(vfsSave(t));
+    }
+  };
+
+  /* ---------- 引擎二：IndexedDB 实现（数百 MB 配额，内容以 Blob 存） ---------- */
+  function openIDB() {
+    return new Promise(function (resolve, reject) {
+      if (typeof indexedDB === "undefined") { reject(new Error("no-indexeddb")); return; }
+      var rq;
+      try { rq = indexedDB.open(IDB_DB, 2); }
+      catch (e) { reject(e); return; }
+      rq.onupgradeneeded = function (ev) {
+        var db = ev.target.result;
+        // meta：内联键（记录自带 k 字段）。v1 曾误建成无 keyPath，需删了重建（该版本未发布，无用户数据）。
+        if (db.objectStoreNames.contains("meta")) {
+          var old = ev.target.transaction.objectStore("meta");
+          if (!old.keyPath) { db.deleteObjectStore("meta"); }
+        }
+        if (!db.objectStoreNames.contains("meta")) db.createObjectStore("meta", { keyPath: "k" });
+        if (!db.objectStoreNames.contains("blobs")) db.createObjectStore("blobs");
+      };
+      rq.onsuccess = function () { resolve(rq.result); };
+      rq.onerror = function () { reject(rq.error || new Error("idb open failed")); };
+      rq.onblocked = function () { reject(new Error("idb blocked")); };
+    });
+  }
+  function idbGetMeta(db) {
+    return new Promise(function (resolve, reject) {
+      var r = db.transaction(["meta"], "readonly").objectStore("meta").get("vfs");
+      r.onsuccess = function () {
+        resolve(r.result && r.result.dirs ? r.result : { dirs: { "": 1 }, files: {} });
+      };
+      r.onerror = function () { reject(r.error); };
+    });
+  }
+  // 元数据 + blob 在同一个 readwrite 事务内改，fn(meta, blobStore) 同步部分排队请求即可
+  function idbMutate(db, fn) {
+    return idbGetMeta(db).then(function (m) {
+      return new Promise(function (resolve, reject) {
+        var t = db.transaction(["meta", "blobs"], "readwrite");
+        var ms = t.objectStore("meta"), bs = t.objectStore("blobs");
+        var out;
+        try { out = fn(m, bs); }
+        catch (e) { try { t.abort(); } catch (_) {} reject(e); return; }
+        ms.put({ k: "vfs", dirs: m.dirs, files: m.files });
+        t.oncomplete = function () { resolve(out === undefined ? { ok: true } : out); };
+        t.onabort = function () { reject(t.error || new Error("idb aborted")); };
+        t.onerror = function () { reject(t.error || new Error("idb error")); };
+      });
+    });
+  }
+  function makeIDBImpl(db) {
+    var impl = {
+      list: function (dir) {
+        dir = dir ? vfsNorm(dir) : "";
+        return idbGetMeta(db).then(function (m) {
+          return { ok: true, path: dir, entries: vfsListEntries(m, dir) };
+        });
+      },
+      get: function (path) {
+        path = vfsNorm(path);
+        return idbGetMeta(db).then(function (m) {
+          var f = m.files[path];
+          if (!f) return { ok: false, error: "文件不存在" };
+          return new Promise(function (resolve, reject) {
+            var r = db.transaction(["blobs"], "readonly").objectStore("blobs").get(path);
+            r.onsuccess = function () {
+              var asText = f.kind === "text";
+              readBlobAs(r.result || new Blob([]), asText).then(function (val) {
+                if (asText) resolve({ ok: true, name: f.name, mime: f.mime, text: true, content: val, textContent: val });
+                else resolve({ ok: true, name: f.name, mime: f.mime, data: val });
+              }, reject);
+            };
+            r.onerror = function () { reject(r.error); };
+          });
+        }).then(function (rec) {
+          // 与旧契约对齐：文本文件 text/content 即字符串本身
+          if (rec.ok && rec.textContent !== undefined) {
+            rec.text = rec.textContent;
+            rec.content = rec.textContent;
+            delete rec.textContent;
+          }
+          return rec;
+        }).catch(function (e) { return quotaError(e); });
+      },
+      put: function (path, rec) {
+        path = vfsNorm(path);
+        return idbMutate(db, function (m, bs) {
+          var acc = "";
+          vfsParent(path).split("/").forEach(function (seg) {
+            if (!seg) return;
+            acc += "/" + seg;
+            m.dirs[acc] = 1;
+          });
+          var isText = rec.text !== undefined && rec.text !== null;
+          var blob, size, kind;
+          if (isText) {
+            var s = String(rec.text);
+            blob = new Blob([s], { type: "text/plain;charset=utf-8" });
+            size = textBytes(s);
+            kind = "text";
+          } else {
+            blob = rec.data ? b64ToBlob(rec.data, rec.mime || "application/octet-stream")
+                            : new Blob([]);
+            size = rec.data ? Math.floor(rec.data.replace(/=+$/, "").length * 3 / 4) : 0;
+            kind = "bin";
+          }
+          m.files[path] = {
+            name: rec.name || path.split("/").pop(),
+            mime: rec.mime || "application/octet-stream",
+            size: size, mtime: Date.now(), kind: kind
+          };
+          bs.put(blob, path);
+        }).catch(function (e) { return quotaError(e); });
+      },
+      del: function (path) {
+        path = vfsNorm(path);
+        return idbMutate(db, function (m, bs) {
+          if (m.files[path] !== undefined) {
+            delete m.files[path];
+            bs.delete(path);
+          } else {
+            var prefix = path + "/";
+            for (var k in m.files) {
+              if (k.indexOf(prefix) === 0) { delete m.files[k]; bs.delete(k); }
+            }
+            for (var d in m.dirs) {
+              if (d === path || d.indexOf(prefix) === 0) delete m.dirs[d];
+            }
+          }
+        }).catch(function (e) { return quotaError(e); });
+      },
+      mkdir: function (path) {
+        path = vfsNorm(path);
+        return idbMutate(db, function (m) {
+          var acc = "";
+          path.split("/").forEach(function (seg) {
+            if (!seg) return;
+            acc += "/" + seg;
+            m.dirs[acc] = 1;
+          });
+        }).catch(function (e) { return quotaError(e); });
+      },
+      usage: function () {
+        return idbGetMeta(db).then(function (m) {
+          var nFiles = 0, nDirs = 0, sum = 0, k, d;
+          for (k in m.files) { nFiles++; sum += m.files[k].size || 0; }
+          for (d in m.dirs) if (d !== "") nDirs++;
+          var est = navigator.storage && navigator.storage.estimate ? navigator.storage.estimate() : null;
+          var fallback = { ok: true, bytes: sum, files: nFiles, dirs: nDirs, max: 256 * 1024 * 1024 };
+          if (!est) return fallback;
+          return est.then(function (q) {
+            // estimate 是整个源的配额；usage 取本库时浏览器无细分接口，取 max(文件总和, 源已用)
+            return {
+              ok: true,
+              bytes: Math.max(sum, (q && q.usage) || sum),
+              files: nFiles, dirs: nDirs,
+              max: (q && q.quota && q.quota > sum) ? q.quota : fallback.max
+            };
+          }, function () { return fallback; });
+        }).catch(function (e) { return quotaError(e); });
+      },
+      clear: function () {
+        return idbMutate(db, function (m, bs) {
+          m.dirs = { "": 1 };
+          m.files = {};
+          bs.clear();
+        }).catch(function (e) { return quotaError(e); });
+      },
+      rename: function (oldPath, newPath) {
+        oldPath = vfsNorm(oldPath);
+        newPath = vfsNorm(newPath);
+        return idbMutate(db, function (m, bs) {
+          var moves = [];
+          if (m.files[oldPath] !== undefined) {
+            moves.push([oldPath, newPath]);
+          } else {
+            var prefix = oldPath + "/", moved = false, k, d;
+            for (k in m.files) {
+              if (k === oldPath || k.indexOf(prefix) === 0) moves.push([k, newPath + k.slice(oldPath.length)]);
+            }
+            for (var ki = 0; ki < moves.length; ki++) {
+              var pair = moves[ki];
+              var rec = m.files[pair[0]];
+              rec.name = pair[1].split("/").pop();
+              rec.mtime = Date.now();
+              delete m.files[pair[0]];
+              m.files[pair[1]] = rec;
+              moved = true;
+            }
+            for (d in m.dirs) {
+              if (d === oldPath || d.indexOf(prefix) === 0) {
+                var nd = newPath + d.slice(oldPath.length);
+                delete m.dirs[d];
+                m.dirs[nd] = 1;
+                moved = true;
+              }
+            }
+            if (!moved && !moves.length) { try { throw new Error("路径不存在"); } catch (e) { return Promise.reject(e); } }
+          }
+          if (m.files[oldPath] !== undefined) {
+            var rec2 = m.files[oldPath];
+            rec2.name = newPath.split("/").pop();
+            rec2.mtime = Date.now();
+            delete m.files[oldPath];
+            m.files[newPath] = rec2;
+          }
+          // blob 改名：同一事务内逐个 get 再 put（请求在 fn 返回后仍会驱动事务至 complete）
+          moves.forEach(function (pair) {
+            var g = bs.get(pair[0]);
+            g.onsuccess = function () {
+              if (g.result !== undefined) bs.put(g.result, pair[1]);
+              bs.delete(pair[0]);
+            };
+          });
+        }).catch(function (e) {
+          if (/路径不存在/.test(e.message || "")) return { ok: false, error: "路径不存在" };
+          return quotaError(e);
+        });
+      }
+    };
+    return impl;
+  }
+  /* 旧 localStorage 数据一次性迁入 IDB（标记存 meta，旧键保留不删） */
+  function migrateLegacy(db) {
+    return new Promise(function (resolve) {
+      var tr = db.transaction(["meta"], "readonly");
+      var gr = tr.objectStore("meta").get("legacy-migrated");
+      gr.onsuccess = function () {
+        if (gr.result) { resolve(); return; }
+        var old = null;
+        try { old = Store.get(VFS_KEY, null); } catch (e) { old = null; }
+        if (!old || !old.files) {
+          var wt = db.transaction(["meta"], "readwrite");
+          wt.objectStore("meta").put({ k: "legacy-migrated" });
+          wt.oncomplete = function () { resolve(); };
+          wt.onerror = function () { resolve(); };
+          return;
+        }
+        var files = {}, puts = [], k;
+        for (k in old.files) {
+          var o = old.files[k] || {};
+          var isText = o.text !== undefined && o.text !== null;
+          files[k] = { name: o.name, mime: o.mime, size: o.size, mtime: o.mtime,
+                       kind: isText ? "text" : "bin" };
+          if (isText) puts.push([k, new Blob([String(o.text)], { type: "text/plain;charset=utf-8" })]);
+          else if (o.data) { try { puts.push([k, b64ToBlob(o.data, o.mime)]); } catch (e) {} }
+        }
+        var t = db.transaction(["meta", "blobs"], "readwrite");
+        t.objectStore("meta").put({ k: "vfs", dirs: old.dirs || { "": 1 }, files: files });
+        t.objectStore("meta").put({ k: "legacy-migrated" });
+        var bs = t.objectStore("blobs");
+        puts.forEach(function (p) { bs.put(p[1], p[0]); });
+        t.oncomplete = function () { resolve(); };
+        t.onerror = function () { resolve(); };
+        t.onabort = function () { resolve(); };
+      };
+      gr.onerror = function () { resolve(); };
+    });
+  }
+  var vfsEngineP = openIDB().then(function (db) {
+    return migrateLegacy(db).then(function () { return makeIDBImpl(db); });
+  }).catch(function (e) {
+    try { console.warn("[vfs] IndexedDB 不可用，降级 localStorage：", e); } catch (_) {}
+    return legacyVfs;
+  });
+  var vfs = {
+    ready: function () { return vfsEngineP.then(function () { return true; }); }
+  };
+  ["list", "get", "put", "del", "mkdir", "usage", "clear", "rename"].forEach(function (name) {
+    vfs[name] = function () {
+      var args = arguments;
+      return vfsEngineP.then(function (impl) { return impl[name].apply(impl, args); });
+    };
+  });
+
+  /* ---------------- base64 / 下载工具 ---------------- */
+  function b64ToBlob(b64, mime) {
+    var bin = atob(b64);
+    var len = bin.length;
+    var buf = new Uint8Array(len);
+    for (var i = 0; i < len; i++) buf[i] = bin.charCodeAt(i);
+    return new Blob([buf], { type: mime || "application/octet-stream" });
+  }
+  var MIME = {
+    txt: "text/plain", md: "text/plain", log: "text/plain", csv: "text/csv",
+    json: "application/json", js: "text/plain", css: "text/css", html: "text/html",
+    png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif",
+    webp: "image/webp", svg: "image/svg+xml", pdf: "application/pdf",
+    zip: "application/zip", mp3: "audio/mpeg", mp4: "video/mp4"
+  };
+  function mimeOf(name) {
+    var ext = String(name || "").split(".").pop().toLowerCase();
+    return MIME[ext] || "application/octet-stream";
+  }
+  function downloadName(name, content) {
+    var url = URL.createObjectURL(content);
+    var a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () {
+      document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    }, 60);
+  }
+  function readFileB64(file) {
+    return new Promise(function (resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function () {
+        // result: data:<mime>;base64,xxxx
+        var s = String(fr.result || "");
+        var i = s.indexOf(",");
+        resolve(i >= 0 ? s.slice(i + 1) : "");
+      };
+      fr.onerror = function () { reject(new Error("读取文件失败")); };
+      fr.readAsDataURL(file);
+    });
+  }
+
+  /* ---------------- 应用注册表与窗口管理 ----------------
+   * 借鉴 ColumnOS：应用清单（id/name/icon/version/desktop）+ 单例窗口 +
+   * 任务视图（运行中应用卡片，可切换/关闭）+ 一键显示桌面。 */
+  var apps = {};          // id -> {def, root, inited, win}
+  var appOrder = [];      // 桌面图标顺序（= 注册顺序，可被清单约定扩展）
+  var zBase = 100;
+  var activeId = null;    // 当前聚焦的运行窗口
+
+  function registerApp(def) {
+    if (!def || !def.id || apps[def.id]) return;
+    apps[def.id] = { def: def, root: null, inited: false, win: null };
+    appOrder.push(def.id);
+    if (desktopReady) renderDesktop();
+  }
+
+  // 应用清单（设置页展示用）
+  function appList() {
+    return appOrder.map(function (id) {
+      var d = apps[id].def;
+      return {
+        id: d.id, name: d.name, icon: d.icon || "·",
+        tone: d.tone || "tone-ink",
+        version: d.version || "1.0.0",
+        desktop: d.desktop !== false
+      };
+    });
+  }
+
+  function winSize() {
+    var w = window.innerWidth, hh = window.innerHeight;
+    // 平板竖屏：接近全屏；桌面：适中窗口
+    var ww = Math.min(w - 24, w < 700 ? w - 16 : 820);
+    var wh = Math.min(hh - 96, w < 700 ? hh - 120 : 580);
+    return { w: ww, h: wh };
+  }
+
+  function focusApp(id) {
+    var rec = apps[id];
+    if (!rec || !rec.win) return false;
+    var wb = rec.win;
+    try {
+      if (wb.min) wb.restore();
+      wb.focus();
+    } catch (e) { }
+    return true;
+  }
+
+  function openApp(id, arg) {
+    var rec = apps[id];
+    if (!rec) return;
+    if (rec.win) { focusApp(id); if (rec.def.onArg) rec.def.onArg(rec.root, arg); return; }
+
+    // 懒构造：应用根节点常驻隐藏容器，WinBox 以 mount 方式搬入，
+    // 关闭时自动搬回原父节点 → 状态（输入内容/滚动位置）完整保留。
+    if (!rec.root) {
+      rec.root = h("div", "nv-app-root nv-wrap");
+      rec.root.style.display = "none";
+      rootsEl.appendChild(rec.root);
+    }
+    if (!rec.inited) {
+      rec.inited = true;
+      try { rec.def.open(rec.root, API_FOR_APP); } catch (e) { }
+    }
+    rec.root.style.display = "";
+
+    var sz = winSize();
+    var n = runningCount();
+    var wb = new WinBox({
+      title: rec.def.name,
+      mount: rec.root,
+      width: sz.w,
+      height: sz.h,
+      x: Math.max(8, Math.round((window.innerWidth - sz.w) / 2) + (n % 4) * 22 - 33),
+      y: Math.max(52, Math.round((window.innerHeight - sz.h) / 2) - 24 + (n % 4) * 18),
+      background: "#1a1d24",
+      border: 0,
+      onclose: function () {
+        // WinBox close 会把 mount 的节点 unmount 回原父节点
+        try { rec.root.dispatchEvent(new Event("nv-close")); } catch (e) { }
+        rec.win = null;
+        rec.root.style.display = "none";
+        if (activeId === id) activeId = null;
+        renderDock();
+      },
+      onfocus: function () { activeId = id; renderDock(); },
+      onminimize: function () { if (activeId === id) activeId = null; renderDock(); },
+      onrestore: function () { activeId = id; renderDock(); }
+    });
+    rec.win = wb;
+    activeId = id;
+    if (rec.def.maximize) { try { wb.maximize(); } catch (e) { } }
+    if (rec.def.onArg) rec.def.onArg(rec.root, arg);
+    renderDock();
+  }
+
+  function closeApp(id) {
+    var rec = apps[id];
+    if (rec && rec.win) { try { rec.win.close(); } catch (e) { } }
+  }
+
+  function minimizeApp(id) {
+    var rec = apps[id];
+    if (rec && rec.win && !rec.win.min) { try { rec.win.minimize(); } catch (e) { } }
+  }
+
+  function runningList() {
+    return appOrder.filter(function (id) { return !!apps[id].win; });
+  }
+  function runningCount() { return runningList().length; }
+
+  /* 显示桌面：有未最小化窗口 → 全部最小化；否则 → 全部还原 */
+  function showDesktop() {
+    var ids = runningList();
+    if (!ids.length) return;
+    var anyVisible = ids.some(function (id) { return !apps[id].win.min; });
+    if (anyVisible) {
+      ids.forEach(function (id) {
+        if (!apps[id].win.min) { try { apps[id].win.minimize(); } catch (e) { } }
+      });
+      activeId = null;
+    } else {
+      ids.forEach(function (id) { try { apps[id].win.restore(); } catch (e) { } });
+      focusApp(ids[ids.length - 1]);
+    }
+    renderDock();
+  }
+
+  /* ---------------- 任务视图（运行中窗口的卡片总览） ---------------- */
+  var taskViewEl = null;
+  function openTaskView() {
+    closeTaskView();
+    var ov = h("div", "nv-taskview");
+    var head = h("div", "nv-taskview-head");
+    head.appendChild(h("span", "nv-taskview-title", "任务"));
+    var headBtns = h("span", "nv-taskview-btns");
+    var bCloseAll = h("button", "nv-tv-btn", "全部关闭");
+    var bExit = h("button", "nv-tv-btn nv-tv-x", "✕");
+    headBtns.appendChild(bCloseAll);
+    headBtns.appendChild(bExit);
+    head.appendChild(headBtns);
+    ov.appendChild(head);
+
+    var grid = h("div", "nv-taskview-grid");
+    var ids = runningList();
+    if (!ids.length) {
+      grid.appendChild(h("div", "nv-taskview-empty", "没有运行中的应用"));
+    }
+    ids.forEach(function (id) {
+      var rec = apps[id], def = rec.def;
+      var card = h("div", "nv-tv-card");
+      var top = h("div", "nv-tv-card-top");
+      var ico = h("div", "nv-tv-card-icon " + (def.tone || "tone-ink"), def.icon || "·");
+      var info = h("div", "nv-tv-card-info");
+      info.appendChild(h("div", "nv-tv-card-name", def.name));
+      info.appendChild(h("div", "nv-tv-card-sub", (rec.win && rec.win.min) ? "已最小化" : "运行中"));
+      top.appendChild(ico);
+      top.appendChild(info);
+      var x = h("button", "nv-tv-card-x", "✕");
+      top.appendChild(x);
+      card.appendChild(top);
+      card.appendChild(h("div", "nv-tv-card-bar"));
+      card.addEventListener("click", function () {
+        closeTaskView();
+        focusApp(id);
+      });
+      x.addEventListener("click", function (e) {
+        e.stopPropagation();
+        closeApp(id);
+        card.parentNode.removeChild(card);
+        if (!runningList().length) setTimeout(closeTaskView, 150);
+      });
+      grid.appendChild(card);
+    });
+    ov.appendChild(grid);
+    document.body.appendChild(ov);
+    taskViewEl = ov;
+
+    bExit.addEventListener("click", closeTaskView);
+    ov.addEventListener("click", function (e) { if (e.target === ov) closeTaskView(); });
+    bCloseAll.addEventListener("click", function () {
+      runningList().slice().forEach(closeApp);
+      closeTaskView();
+    });
+  }
+  function closeTaskView() {
+    if (taskViewEl) {
+      if (taskViewEl.parentNode) taskViewEl.parentNode.removeChild(taskViewEl);
+      taskViewEl = null;
+    }
+  }
+
+  /* ---------------- 系统级文件选择对话框 ----------------
+   * pickFile({mode:"open"|"save", source, path, filter}) -> Promise<{source,path,name}|null>
+   * 调起文件管理器并进入选择模式；用户点击文件或保存后 resolve。 */
+  var _pickState = null;   // {resolve, opts}
+  function pickFile(opts) {
+    opts = opts || {};
+    return new Promise(function (resolve) {
+      _pickState = { resolve: resolve, opts: opts };
+      openApp("files", {
+        __pick: true,
+        source: opts.source || "fs",
+        path: opts.path || "",
+        mode: opts.mode || "open",
+        filter: opts.filter || null
+      });
+    });
+  }
+  function _pickDone(result) {
+    if (_pickState) {
+      _pickState.resolve(result);
+      _pickState = null;
+    }
+  }
+
+  /* ---------------- 桌面 ---------------- */
+  var desktopReady = false;
+  var iconsEl, dockEl, rootsEl;
+
+  function renderDesktop() {
+    if (!iconsEl) return;
+    clear(iconsEl);
+    appOrder.forEach(function (id) {
+      var def = apps[id].def;
+      if (def.desktop === false) return;   // 清单声明不在桌面展示的应用
+      var item = h("div", "nv-app");
+      var ico = h("div", "nv-app-icon " + (def.tone || "tone-ink"));
+      ico.textContent = def.icon || "·";
+      var name = h("div", "nv-app-name", def.name);
+      item.appendChild(ico);
+      item.appendChild(name);
+      item.addEventListener("click", function () { openApp(id); });
+      iconsEl.appendChild(item);
+    });
+  }
+
+  function renderDock() {
+    if (!dockEl) return;
+    clear(dockEl);
+    var running = appOrder.filter(function (id) { return !!apps[id].win; });
+    if (!running.length) {
+      dockEl.appendChild(h("span", "nv-dock-empty", "打开的应用会出现在这里"));
+      return;
+    }
+    running.forEach(function (id) {
+      var rec = apps[id];
+      var cls = "nv-dock-item running" + (id === activeId ? " active" : "");
+      var d = h("div", cls, rec.def.icon || "·");
+      d.title = rec.def.name;
+      d.addEventListener("click", function () {
+        if (id === activeId) { minimizeApp(id); }     // 点活动项 = 最小化
+        else focusApp(id);
+      });
+      dockEl.appendChild(d);
+    });
+  }
+
+  /* ---------------- 锁屏 ---------------- */
+  var PIN_KEY = "nova2.pin";
+  var pinInput = "";
+  var pinMode = "check";        // check / set-new / set-again / set-old
+  var pinStage = "";             // 暂存第一次输入的新 PIN
+
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+  function tickClock() {
+    var d = new Date();
+    var hm = pad(d.getHours()) + ":" + pad(d.getMinutes());
+    var week = ["日", "一", "二", "三", "四", "五", "六"][d.getDay()];
+    var dateStr = d.getFullYear() + "年" + (d.getMonth() + 1) + "月" + d.getDate() +
+                  "日 · 星期" + week;
+    var c1 = document.getElementById("nv-clock");
+    var c2 = document.getElementById("nv-date");
+    var c3 = document.getElementById("nv-sb-clock");
+    if (c1) c1.textContent = hm;
+    if (c2) c2.textContent = dateStr;
+    if (c3) c3.textContent = hm;
+  }
+
+  function enterDesktop() {
+    document.getElementById("nv-lock").classList.add("nv-hidden");
+    document.getElementById("nv-desktop").classList.remove("nv-hidden");
+  }
+  function lockScreen() {
+    // 关闭所有窗口前先复位锁屏状态
+    for (var k in apps) {
+      if (apps[k].win) { try { apps[k].win.close(); } catch (e) { } }
+    }
+    pinInput = ""; pinMode = "check"; pinStage = "";
+    renderPinDots();
+    setPinTip("请输入锁屏密码");
+    document.getElementById("nv-lock").classList.remove("nv-hidden");
+    document.getElementById("nv-desktop").classList.add("nv-hidden");
+  }
+
+  function renderPinDots(err) {
+    var dots = document.getElementById("nv-pin-dots").children;
+    for (var i = 0; i < dots.length; i++) {
+      dots[i].className = i < pinInput.length ? "on" : "";
+      if (err) dots[i].className = "err";
+    }
+  }
+  function setPinTip(t) {
+    var el = document.getElementById("nv-pin-tip");
+    if (el) el.textContent = t;
+  }
+
+  function pinDone() {
+    var saved = Store.get(PIN_KEY, "");
+    if (pinMode === "check") {
+      if (pinInput === String(saved)) { enterDesktop(); }
+      else {
+        renderPinDots(true);
+        setPinTip("密码错误");
+        pinInput = "";
+        setTimeout(function () { renderPinDots(); setPinTip("请输入锁屏密码"); }, 650);
+      }
+    } else if (pinMode === "set-old") {
+      if (pinInput === String(saved)) {
+        pinMode = "set-new"; pinInput = ""; renderPinDots(); setPinTip("请输入新密码（4 位数字）");
+      } else {
+        renderPinDots(true); setPinTip("原密码错误"); pinInput = "";
+        setTimeout(function () { renderPinDots(); setPinTip("请输入原密码"); }, 650);
+      }
+    } else if (pinMode === "set-new") {
+      pinStage = pinInput;
+      pinMode = "set-again"; pinInput = ""; renderPinDots(); setPinTip("请再次输入新密码");
+    } else if (pinMode === "set-again") {
+      if (pinInput === pinStage) {
+        Store.set(PIN_KEY, pinInput);
+        toast("密码已设置");
+        pinMode = "check"; pinInput = ""; renderPinDots(); setPinTip("请输入锁屏密码");
+      } else {
+        renderPinDots(true); setPinTip("两次输入不一致"); pinInput = "";
+        pinMode = "set-new"; pinStage = "";
+        setTimeout(function () { renderPinDots(); setPinTip("请输入新密码（4 位数字）"); }, 800);
+      }
+    }
+  }
+
+  function initLock() {
+    var lockEl = document.getElementById("nv-lock");
+    var hasPin = function () { return !!Store.get(PIN_KEY, ""); };
+
+    function refreshLockMode() {
+      document.getElementById("nv-pin-panel").classList.toggle("nv-hidden", !hasPin());
+      document.getElementById("nv-enter-hint").classList.toggle("nv-hidden", hasPin());
+    }
+    refreshLockMode();
+
+    // 无密码：点击锁屏任意处进入
+    lockEl.addEventListener("click", function (e) {
+      if (hasPin()) return;
+      // 避免点到数字键盘留白区（无密码时键盘隐藏，实际不会触发）
+      enterDesktop();
+    });
+
+    // 数字键盘
+    var padEl = document.querySelector(".nv-pad");
+    padEl.addEventListener("click", function (e) {
+      var btn = e.target;
+      if (btn.tagName !== "BUTTON") return;
+      e.stopPropagation();
+      var k = btn.getAttribute("data-k");
+      if (k === "del") {
+        pinInput = pinInput.slice(0, -1);
+        renderPinDots();
+      } else if (k === "set") {
+        if (hasPin()) {
+          pinMode = "set-old"; pinInput = ""; renderPinDots(); setPinTip("请输入原密码");
+        } else {
+          pinMode = "set-new"; pinInput = ""; renderPinDots(); setPinTip("请输入新密码（4 位数字）");
+        }
+      } else {
+        if (pinInput.length >= 4) return;
+        pinInput += k;
+        renderPinDots();
+        if (pinInput.length === 4) setTimeout(pinDone, 120);
+      }
+    });
+
+    // 物理键盘也可输入（桌面调试）
+    document.addEventListener("keydown", function (e) {
+      if (lockEl.classList.contains("nv-hidden")) return;
+      if (!hasPin() && (e.key === "Enter" || e.keyCode === 13)) { enterDesktop(); return; }
+      if (/^[0-9]$/.test(e.key) && pinInput.length < 4) {
+        pinInput += e.key; renderPinDots();
+        if (pinInput.length === 4) setTimeout(pinDone, 120);
+      } else if (e.key === "Backspace") {
+        pinInput = pinInput.slice(0, -1); renderPinDots();
+      }
+    });
+
+    // 每次重新锁屏都要同步模式（可能在设置后）
+    window.addEventListener("focus", refreshLockMode);
+  }
+
+  /* ---------------- 对外 API（传给每个应用） ---------------- */
+  var API_FOR_APP = null;   // boot 时构造
+
+  /* ---------------- 启动 ---------------- */
+  function boot() {
+    if (!window.WinBox) {
+      var w = document.createElement("div");
+      w.style.cssText = "position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px;z-index:999";
+      w.textContent = "窗口组件加载失败，请检查网络后刷新";
+      document.body.appendChild(w);
+      return;
+    }
+
+    iconsEl = document.getElementById("nv-icons");
+    dockEl = document.getElementById("nv-dock");
+    rootsEl = h("div", "nv-app-roots");
+    rootsEl.style.display = "none";
+    document.body.appendChild(rootsEl);
+
+    API_FOR_APP = {
+      store: Store,
+      api: api,
+      net: {
+        probe: netProbe,
+        getWeb: netGetWeb,
+        info: function () { return NET.info; },
+        base: function () { return NET.base; },
+        online: function () { return NET.online; }
+      },
+      vfs: vfs,
+      ui: ui,
+      dlg: dlg,
+      toast: toast,
+      on: on,
+      emit: emit,
+      h: h,
+      clear: clear,
+      openApp: openApp,
+      closeApp: closeApp,
+      minimizeApp: minimizeApp,
+      apps: appList,
+      running: runningList,
+      lock: lockScreen,
+      download: downloadName,
+      b64ToBlob: b64ToBlob,
+      mimeOf: mimeOf,
+      readFileB64: readFileB64,
+      pickFile: pickFile,
+      _pickDone: _pickDone
+    };
+    window.OS = API_FOR_APP;
+    window.OS.registerApp = registerApp;   // 扩展口：OS.registerApp({id,name,icon,open})
+
+    applyWallpaper(ui.wallpaper());
+    tickClock();
+    setInterval(tickClock, 1000);
+    initLock();
+
+    var btnLock = document.getElementById("nv-sb-lock");
+    if (btnLock) btnLock.addEventListener("click", lockScreen);
+    var btnHome = document.getElementById("nv-sb-home");
+    if (btnHome) btnHome.addEventListener("click", showDesktop);
+    var btnTask = document.getElementById("nv-sb-task");
+    if (btnTask) btnTask.addEventListener("click", openTaskView);
+    // 返回专栏：通知父页面 loader 隐藏本 iframe（口令/连点可再唤起）
+    var btnBack = document.getElementById("nv-sb-back");
+    if (btnBack) btnBack.addEventListener("click", function () {
+      try {
+        var tk = window.__NVA_TOKEN__ || "";
+        if (tk && window.parent && window.parent !== window) {
+          window.parent.postMessage({ t: "nva-hide", k: tk }, "*");
+        } else {
+          toast("未在劫持环境中运行");
+        }
+      } catch (e) { }
+    });
+    netChanged();   // 初始网络灯（探测完成前为“离线/探测中”灰灯）
+
+    desktopReady = true;
+    renderDesktop();
+    renderDock();
+    window.OS.__booted = true;
+
+    // 后台预热：判定劫持同源 / 热点直连 / 完全离线，供文件应用即时使用
+    setTimeout(function () { netProbe(false); }, 800);
+  }
+
+  // nova.html 末尾会调用 OS.boot()；此处兜底（脚本顺序变化时也能启动）
+  // 先暴露引导对象：应用脚本（os.js 之后加载）用 OS.registerApp 注册
+  window.OS = { boot: boot, registerApp: registerApp, __booted: false };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", function () {
+      if (!window.OS.__booted) boot();
+    });
+  }
+
+  window.__nvBoot = boot;
+})();

@@ -316,7 +316,18 @@ self.addEventListener('message', async (e) => {
     }
 });
 `;
-const worker = new Worker(URL.createObjectURL(new Blob([workerScript], { type: 'application/javascript' })));
+// 同源独立 worker（内部 importScripts 加载 cryptopoly.js 垫片）。
+// 不再用 Blob worker：Blob worker 在 HTTP 非安全源内拿不到 crypto.subtle，
+// 且独立文件可被长缓存，断劫持离线时仍可用。
+const _nvaWorkerURL = (function () {
+    try {
+        if (typeof document !== 'undefined' && document.currentScript && document.currentScript.src)
+            return new URL('novaworker.js', document.currentScript.src).href;
+    } catch (e) { }
+    return new URL('novaworker.js',
+        (typeof self !== 'undefined' ? self.location.href : location.href)).href;
+})();
+const worker = new Worker(_nvaWorkerURL);
 
 function runWorker(type, content, key) {
     return new Promise((resolve, reject) => {

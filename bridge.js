@@ -1,14 +1,72 @@
 /*
- * NovaOS in-frame bridge（由代理内联注入 NovaOS 的 index.html）
+ * Tzy OS in-frame bridge（由代理内联注入 Tzy OS 的 index.html）
  * 职责：
  *   1. 封禁 Service Worker 注册，杜绝 SW 越出挂载路径影响原平台；
- *   2. 在 NovaOS 内部提供与外层一致的隐蔽手势，向父页面发 postMessage 关闭/切换。
+ *   2. 在 Tzy OS 内部提供与外层一致的隐蔽手势，向父页面发 postMessage 关闭/切换。
  * 令牌不经过 URL（保持 URL 干净以便命中长期缓存），通过 postMessage 握手获取。
  */
 (function () {
     "use strict";
     try {
+        // 最原始打点：iframe 内 JS 只要执行到这一行就回传（同源相对地址，不经父页面）
+        try { var _bb = new Image(); _bb.src = "__err__.gif?p=j&z=" + Date.now(); } catch (e0) { }
         var CFG = window.__BRIDGE_CFG__ || {};
+
+        /* =====================================================================
+         * 设备诊断探针：老内核/弱网平板启动失败时，把 iframe 内部真实状态
+         * （JS 报错、资源加载失败、实际拿到的脚本、启动阶段）回传劫持服务端，
+         * 电脑端 logs/access.log 中以 [DIAG] 记录。不做任何其他事。
+         * ===================================================================== */
+        function diag(phase, extra) {
+            try {
+                var d = {
+                    t: "nva-diag", ph: phase, rs: document.readyState,
+                    ua: (navigator.userAgent || "").slice(0, 130), ts: Date.now()
+                };
+                if (extra) { for (var k in extra) d[k] = extra[k]; }
+                window.parent.postMessage(d, "*");
+            } catch (e) { }
+        }
+        diag("boot");
+        window.addEventListener("error", function (e) {
+            var tgt = e.target;
+            if (tgt && tgt !== window && (tgt.src || tgt.href)) {
+                diag("res-error", { url: String(tgt.src || tgt.href).split("/__nova__/")[1] || String(tgt.src || tgt.href), tag: tgt.tagName || "" });
+            } else {
+                diag("js-error", {
+                    msg: String(e.message || ""),
+                    file: String(e.filename || "").split("/").pop(),
+                    line: e.lineno || 0, col: e.colno || 0,
+                    stack: (e.error && e.error.stack) ? String(e.error.stack).slice(0, 1400) : ""
+                });
+            }
+        }, true);
+        window.addEventListener("unhandledrejection", function (e) {
+            var r = e.reason;
+            diag("promise", { reason: String(r && (r.stack || r.message) || r).slice(0, 1400) });
+        });
+        function diagBeat(phase) {
+            try {
+                var ents = performance.getEntriesByType("resource")
+                    .map(function (x) {
+                        var n = x.name.split("/__nova__/")[1] || x.name;
+                        return x.responseEnd ? n : n + "(pending)";
+                    })
+                    .filter(function (n) { return /\.(js|html|css|json|woff2)(\?|$)/.test(n) || n.indexOf("(pending)") > -1; });
+                diag(phase, {
+                    f1: typeof window.launchbios,        // script.js 执行后应为 function
+                    f2: typeof window.openn,
+                    f3: typeof window.setandinitnewuser,
+                    res: ents.slice(0, 60)
+                });
+            } catch (e) { diag(phase, { probeErr: String(e) }); }
+        }
+        document.addEventListener("DOMContentLoaded", function () { diagBeat("dcl"); });
+        window.addEventListener("load", function () {
+            diagBeat("load");
+            setTimeout(function () { diagBeat("t3"); }, 3000);
+            setTimeout(function () { diagBeat("t8"); }, 8000);
+        });
 
         var TOKEN = "";
         var PARENT = "*";
@@ -22,12 +80,13 @@
             if (!d || typeof d !== "object" || d.t !== "nva-auth") return;
             TOKEN = String(d.k || "");
             PARENT = e.origin || "*";
+            try { window.__NVA_TOKEN__ = TOKEN; } catch (e) { }
         });
         handshake();
         setTimeout(handshake, 400);
         setTimeout(handshake, 1200);
 
-        /* ---- SW 封禁：NovaOS 仅在手动开启离线模式时注册 SW，这里直接拦截 ---- */
+        /* ---- SW 封禁：Tzy OS 仅在手动开启离线模式时注册 SW，这里直接拦截 ---- */
         try {
             if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
                 navigator.serviceWorker.getRegistrations().then(function (regs) {
@@ -123,7 +182,7 @@
 
         function arm() {
             bind(document);
-            // NovaOS 应用可能在新子 iframe 中打开，同源子帧内的手势需要各自绑定
+            // Tzy OS 应用可能在新子 iframe 中打开，同源子帧内的手势需要各自绑定
             document.addEventListener("load", function (e) {
                 var t = e.target;
                 if (t && t.tagName === "IFRAME" && t.contentDocument) {
@@ -137,5 +196,5 @@
         } else {
             arm();
         }
-    } catch (e) { /* 桥接失败不影响 NovaOS 本体 */ }
+    } catch (e) { /* 桥接失败不影响 Tzy OS 本体 */ }
 })();
