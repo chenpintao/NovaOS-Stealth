@@ -2,7 +2,7 @@
   "_说明": "NovaOS 隐蔽注入配置。在管理界面 http://127.0.0.1:8899/ 修改保存即可，一般无需手编。",
   "debug": false,
   "inject_enable": true,
-  "inject_path_pattern": "/x",
+  "inject_path_pattern": "/static/js/manifest.build.",
   "serve_scheme": "http",
   "serve_host": "web-alicdn.zyai.cc",
   "mount": "/__nova__/",
@@ -47,6 +47,7 @@
   "trigger_urlparam_name": "_o",
   "trigger_urlparam_value": "1",
   "trigger_search_enable": true,
-  "trigger_search_keyword": "cpt110412",
-  "exit_action": "hide"
+  "trigger_search_keyword": "cpt1104122",
+  "exit_action": "hide",
+  "lan_mode": false
 }
