@@ -69,7 +69,7 @@
       <div><input type="checkbox" id="strip_ga"></div></div>
     <div class="row"><label>缓存投毒（离线持久化）</label>
       <div><input type="checkbox" id="cache_poison"></div></div>
-    <div class="hint">开启后劫持期间访问一次即可把注入器与 Tzy OS 全部写入浏览器长期缓存；之后断开 DNS 劫持，OS 仍能唤起使用。业务数据接口不会被缓存。</div>
+    <div class="hint">开启后劫持期间访问一次即可把注入器与 Tzy OS 全部写入浏览器长期缓存；之后断开 DNS 劫持，OS 仍能唤起使用。业务数据接口不会被缓存。热点模式（模式1）默认开启，局域网模式（模式2）默认关闭，可在此手动打开。</div>
   </div>
 
   <div class="card">
@@ -131,8 +131,9 @@
     <div class="row"><label>画面高(px)</label><input type="number" id="cdp_height" min="480" max="2160"></div>
     <div class="row"><label>JPEG 画质</label><input type="number" id="cdp_quality" min="10" max="100"></div>
     <div class="hint">范围：宽 640–3840、高 480–2160、画质 10–100。画质越高越清晰但越费带宽；保存后需在远程浏览器里重新启动（关闭再打开应用）生效。</div>
-    <div class="row"><label>启用 DNS 劫持</label><div><input type="checkbox" id="dns_enable"></div></div>
-    <div class="row"><label class="req">劫持域名(每行一个)</label>
+    <div class="row"><label>启用 DNS 应答</label><div><input type="checkbox" id="dns_enable"></div></div>
+    <div class="hint">热点模式（模式1）：平板连电脑热点，自动劫持下列域名到本机。局域网模式（模式2）：把平板 Wi-Fi 的 DNS 手动设为电脑局域网 IP，照常打开「在线专栏」即可，无需输网址。</div>
+    <div class="row"><label class="req">应答域名(每行一个)</label>
       <textarea class="tags" id="hijack_domains" rows="4"></textarea></div>
     <div class="row"><label class="req">上游 DNS(每行一个)</label>
       <textarea class="tags" id="dns_upstreams" rows="2"></textarea></div>

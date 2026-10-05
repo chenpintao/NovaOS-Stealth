@@ -1,3 +1,5 @@
 flask>=2.0
 requests>=2.25
 websocket-client>=1.0
+# 小说下载后端（novelsrc 聚合中文书源）额外依赖，随内嵌 runtime 分发：
+# beautifulsoup4, lxml, pycryptodome, cryptography, ebooklib, charset-normalizer

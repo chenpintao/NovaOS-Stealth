@@ -2,6 +2,7 @@
 """总控：DNS + HTTP 透明代理 + 本机管理界面 三线程编排。"""
 import signal
 import socket
+import sys
 import threading
 
 import requests
@@ -13,6 +14,7 @@ from novacore.proxy_app import create_proxy_app
 from novacore.admin_app import create_admin_app
 from novacore.cdp_browser import CDP
 from novacore.netutil import local_ip, answer_ip
+from novacore.paths import set_slog_debug, slog_debug, slog
 
 class ServerThread(threading.Thread):
     def __init__(self, app, host, port, name):
@@ -34,30 +36,45 @@ class ServerThread(threading.Thread):
 def main():
     requests.packages.urllib3.disable_warnings()
     load_config()
+    set_slog_debug(bool(cfg("debug", False)))
+    slog("info", "boot", "服务启动，调试模式=%s，python=%s" %
+         (slog_debug() and "开" or "关", sys.version.split()[0]))
     errs = validate(CONFIG)
     if errs:
+        slog("warn", "boot", "config.json 校验未通过：%s" % "; ".join(
+            "%s=%s" % (k, v) for k, v in errs.items()))
         print("config.json 校验未通过，请在管理界面修正：")
         for k, v in errs.items():
             print("  - %s: %s" % (k, v))
 
     lan_mode = bool(cfg("lan_mode", False))
-    dns = DNSThread() if (cfg("dns_enable", True) and not lan_mode) else None
+    # DNS 应答与运行模式解耦：局域网模式也默认开启（平板 Wi-Fi DNS 指向本机，
+    # 只解析 hijack_domains 里的平台域名，其余域名照常转发）。
+    dns = DNSThread() if cfg("dns_enable", True) else None
     if dns:
         dns.start()
+        slog("info", "dns", "DNS 劫持线程已启动")
 
     proxy = ServerThread(create_proxy_app(), "0.0.0.0", int(cfg("http_port", 80)), "HTTP")
     proxy.start()
     admin = ServerThread(create_admin_app(), "127.0.0.1", int(cfg("admin_port", 8899)), "ADMIN")
     admin.start()
+    slog("info", "boot", "HTTP :%s / ADMIN 127.0.0.1:%s 已监听（lan_mode=%s）" %
+         (int(cfg("http_port", 80)), int(cfg("admin_port", 8899)), lan_mode))
 
     print("=" * 60)
     print(" Tzy OS stealth 注入服务已启动")
     print(" 配置界面      : http://127.0.0.1:%d/" % int(cfg("admin_port", 8899)))
     print(" Tzy OS 挂载点 : %s://%s%s" % (cfg("serve_scheme", "http"), cfg("serve_host"), mount_prefix()))
     if lan_mode:
-        print(" 运行模式      : 局域网代理（无热点 / 无 DNS 劫持）")
+        if dns:
+            print(" 运行模式      : 局域网模式（DNS 应答已开启）")
+            print(" 平板 DNS      : 把平板 Wi-Fi 的 DNS 手动设为 %s" % answer_ip())
+            print(" 平板接入      : DNS 指到本机后，照常打开“在线专栏”即可（无需输网址）")
+        else:
+            print(" 运行模式      : 局域网模式（DNS 应答已关闭）")
+            print(" 平板接入      : 浏览器直接打开下方局域网地址")
         print(" 局域网访问    : http://%s%s" % (local_ip(), mount_prefix()))
-        print(" 平板接入      : 与电脑同一局域网，浏览器直接打开上方地址")
     else:
         print(" 运行模式      : 热点 DNS 劫持")
         if str(cfg("answer_ip", "auto")) == "auto":

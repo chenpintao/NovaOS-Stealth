@@ -15,7 +15,7 @@ from novacore.configutil import (
     cfg, CONFIG, novaos_dir, mount_prefix, BROWSER_KEYS,
 )
 from novacore.paths import (
-    LOADER_PATH, BOOT_STUB_PATH, BOOT_NAME, BOOT_SNAPSHOT, write_access,
+    LOADER_PATH, BOOT_STUB_PATH, BOOT_NAME, BOOT_SNAPSHOT, write_access, slog,
 )
 from novacore.htmlkit import (
     FILELIST_NAME, HOP_BY_HOP, CACHEABLE_EXT,
@@ -24,6 +24,7 @@ from novacore.htmlkit import (
 from novacore.netutil import resolve_external
 from novacore.sources import lan_hosts, serve_nova_api, api_preflight
 from novacore.cdp_browser import serve_nova_cdp
+from novacore.novel_dl import proxy_novel
 from novacore import toolkit
 
 def create_proxy_app():
@@ -38,6 +39,12 @@ def create_proxy_app():
             write_access("%s %s host=%s %s %s -> %s UA=%s" % (
                 time.strftime("%Y-%m-%d %H:%M:%S"), request.remote_addr,
                 request.host, request.method, path, resp.status_code, ua))
+            # 挂载点下 API/系统/CDP 请求的 4xx/5xx 单独进服务端诊断日志（故障第一现场）
+            if resp.status_code >= 400 and ("/api/" in request.path or
+                                           "/sys/" in request.path or
+                                           "/cdp/" in request.path):
+                slog("warn", "http", "%s %s -> %s（UA=%s）" % (
+                    request.method, path[:300], resp.status_code, ua[:80]))
         except Exception:
             pass
         return resp
@@ -210,7 +217,60 @@ def create_proxy_app():
                         'attachment; filename="%s"' % toolkit.backup_filename())
                     resp.headers["Cache-Control"] = "no-store"
                     return resp
+                # 平板离线空间（IndexedDB VFS）备份到电脑：begin → push* → commit
+                if sub == "vfs-begin" and request.method == "POST":
+                    try:
+                        body = request.get_json(force=True, silent=True) or {}
+                        sid = toolkit.tablet_backup_begin(body)
+                        return jsonify({"ok": True, "sid": sid})
+                    except Exception as e:
+                        return jsonify({"ok": False, "error": str(e)}), 500
+                if sub == "vfs-push" and request.method == "POST":
+                    try:
+                        info = toolkit.tablet_backup_push(
+                            request.args.get("sid", ""),
+                            request.args.get("p", ""),
+                            request.stream)
+                        return jsonify({"ok": True, "saved": info})
+                    except KeyError as e:
+                        return jsonify({"ok": False, "error": str(e)}), 404
+                    except ValueError as e:
+                        return jsonify({"ok": False, "error": str(e)}), 400
+                    except Exception as e:
+                        return jsonify({"ok": False, "error": str(e)}), 500
+                if sub == "vfs-commit" and request.method == "POST":
+                    try:
+                        sid = (request.get_json(force=True, silent=True) or {}).get("sid", "")
+                        return jsonify({"ok": True, "result": toolkit.tablet_backup_commit(sid)})
+                    except KeyError as e:
+                        return jsonify({"ok": False, "error": str(e)}), 404
+                    except Exception as e:
+                        return jsonify({"ok": False, "error": str(e)}), 500
+                # 调试模式：平板 console/异常日志回传，按天落 logs/tablet-*.log
+                if sub == "log" and request.method == "POST":
+                    body = request.get_json(force=True, silent=True) or {}
+                    n = toolkit.append_tablet_log(
+                        request.remote_addr, body.get("logs", []),
+                        request.headers.get("User-Agent", ""))
+                    return jsonify({"ok": True, "received": n})
+                # Tzy 应用仓库：目录清单 + 包文件下载（.tzyp）
+                if sub == "app-catalog" and request.method in ("GET", "HEAD", "POST"):
+                    return jsonify({"ok": True, "apps": toolkit.app_repo_catalog()})
+                if sub == "app-package" and request.method in ("GET", "HEAD"):
+                    fp = toolkit.app_repo_package(request.args.get("f", ""))
+                    if not fp:
+                        abort(404)
+                    resp = send_file(fp, mimetype="application/zip",
+                                     as_attachment=False, conditional=True)
+                    resp.headers["Cache-Control"] = "no-store"
+                    return resp
                 abort(404)
+            # 小说下载后端：本机 novelsrc 聚合服务（按需拉起 + 流式反代），
+            # 平板端小说应用通过 /__nova__/novel/api/* 调用。
+            if rel.startswith("novel/"):
+                if request.method == "OPTIONS":
+                    return api_preflight()
+                return proxy_novel(rel)
             # 应用 API：GET/POST + 跨域预检（api/web 用 GET 走电脑网络代取外网）
             if rel.startswith("api/"):
                 if request.method == "OPTIONS":

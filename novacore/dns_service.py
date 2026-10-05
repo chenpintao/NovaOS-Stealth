@@ -43,10 +43,19 @@ class DNSThread(threading.Thread):
         except OSError:
             pass
         bound_ip = None
-        # 热点开启后网卡 IP（192.168.137.1）要几秒才就绪。
+        lan = bool(cfg("lan_mode", False))
+        if lan:
+            # 局域网模式：平板 Wi-Fi 的 DNS 手动指向本机，直接通配绑定即可，
+            # 不必等热点网卡（模式 2 下没有热点），让服务秒级就绪。
+            try:
+                sock.bind(("0.0.0.0", 53))
+                bound_ip = "0.0.0.0"
+            except OSError:
+                pass
+        # 热点模式：热点开启后网卡 IP（192.168.137.1）要几秒才就绪。
         # 先等它并精确绑定（唯一能稳定压过 ICS 通配绑定的方式）；
         # 12 秒内热点网卡没出现（/nohotspot 或纯局域网模式）再退回通配。
-        for _ in range(6):
+        for _ in range(0 if lan else 6):
             hip = hotspot_ip()
             if hip:
                 try:
@@ -70,6 +79,8 @@ class DNSThread(threading.Thread):
         self.sock.settimeout(2)
         self.running = True
         print("[DNS] 已启动 %s:53，劫持域名 -> %s" % (bound_ip, answer_ip()))
+        if lan:
+            print("[DNS] 局域网模式：把平板的 Wi-Fi DNS 手动设为 %s" % answer_ip())
         while self.running:
             try:
                 data, addr = self.sock.recvfrom(1024)

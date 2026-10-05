@@ -1,7 +1,7 @@
 /* ============================================================
- * Tzy OS · 记事本（多文档）
+ * Tzy OS · 记事本（多文档）v1.2.0
  * - 文档明文存 localStorage
- * - 支持把当前文档另存到电脑（api/fs/put）
+ * - 支持把当前文档另存到电脑（api/fs/put）或离线空间（VFS，断网可用）
  * - 文件管理器用 OS.openApp("editor", {__editRemote,payload}) 调起远程文件编辑，
  *   保存时写回原处（电脑 / FTP / SMB / 离线空间）
  * Loshop & Cpt
@@ -16,7 +16,7 @@
     name: "记事本",
     icon: "📝",
     tone: "tone-gold",
-    version: "1.1.0",
+    version: "1.2.0",
     open: function (root, OS) { build(root, OS); },
     onArg: function (root, arg) {
       // 文件管理器 → 编辑远程文本文件
@@ -52,6 +52,7 @@
     sel.style.maxWidth = "130px";
 
     var btnSavePC = OS.h("button", "nv-btn", "存到电脑");
+    var btnSaveVfs = OS.h("button", "nv-btn", "存离线");
     var btnPutRemote = OS.h("button", "nv-btn primary", "保存回原处");
     btnPutRemote.style.display = "none";
     var btnToLocal = OS.h("button", "nv-btn", "转存本地");
@@ -66,6 +67,7 @@
     bar.appendChild(btnOpen);
     bar.appendChild(sel);
     bar.appendChild(btnSavePC);
+    bar.appendChild(btnSaveVfs);
     bar.appendChild(btnPutRemote);
     bar.appendChild(btnToLocal);
     bar.appendChild(btnDel);
@@ -188,13 +190,23 @@
         else if (sel.source === "ftp") callGet = OS.api.ftp(Object.assign({}, OS.store.get("nova2.ftp", {}), { op: "get", path: sel.path }));
         else callGet = OS.api.smb(Object.assign({}, OS.store.get("nova2.smb", {}), { op: "get", path: sel.path }));
         callGet.then(function (r) {
-          if (!r.ok) { OS.toast(r.error || "读取失败"); return; }
+          if (!r.ok) {
+            OS.log("editor", "打开文件读取失败 [" + sel.source + "] " + sel.path + "：" +
+              (r.offline ? "(离线/电脑不可达)" : (r.error || "未知")), "error");
+            OS.toast(r.error || "读取失败");
+            return;
+          }
           if (!r.text) { OS.toast("不是文本文件"); return; }
+          OS.log("editor", "已载入远程文本：[" + sel.source + "] " + sel.path + " " +
+            (r.content ? r.content.length : 0) + " 字");
           loadRemote({
             source: sel.source, path: sel.path, subPath: sel.path,
             conn: sel.source === "fs" || sel.source === "vfs" ? null : OS.store.get(CFG_KEYS[sel.source], null),
             name: sel.name, content: r.content
           });
+        }, function (err) {
+          OS.logerr("editor", err, "打开文件请求异常 [" + sel.source + "] " + sel.path);
+          OS.toast("读取失败：" + (err && err.message));
         });
       });
     });
@@ -220,8 +232,49 @@
         if (!path) return;
         setStatus("正在保存到电脑…");
         OS.api.fs("put", { path: path, content: ta.value }).then(function (r) {
-          if (r.ok) { OS.toast("已保存到电脑：" + path); setStatus("已保存到电脑 · " + wordCount()); }
-          else { OS.toast(r.error || "保存失败"); setStatus("保存失败：" + (r.error || "")); }
+          if (r.ok) {
+            OS.log("editor", "文本已保存到电脑：" + path + " " + ta.value.length + " 字");
+            OS.toast("已保存到电脑：" + path);
+            setStatus("已保存到电脑 · " + wordCount());
+          } else {
+            OS.log("editor", "保存到电脑失败 " + path + "：" + (r.error || "未知"), "error");
+            OS.toast(r.error || "保存失败");
+            setStatus("保存失败：" + (r.error || ""));
+          }
+        }, function (err) {
+          OS.logerr("editor", err, "保存到电脑请求异常 " + path);
+          OS.toast("保存失败：" + (err && err.message));
+          setStatus("保存失败");
+        });
+      });
+    });
+
+    /* 保存到离线空间（VFS 根目录或指定文件名，断网可用，文件管理器「离线」可见） */
+    btnSaveVfs.addEventListener("click", function () {
+      var d = cur();
+      var p = state.remote;
+      var def = p ? p.name : ((d ? d.name : "note") + ".txt");
+      OS.dlg.prompt("保存到离线空间的文件名", def, "存离线").then(function (fname) {
+        if (fname === null) return;
+        fname = (fname || "").trim().replace(/[\\/]/g, "");
+        if (!fname) return;
+        setStatus("正在保存到离线空间…");
+        OS.vfs.put("/" + fname, {
+          name: fname, mime: "text/plain", text: ta.value
+        }).then(function (r) {
+          if (r && r.ok === false) {
+            OS.log("editor", "保存到离线空间失败 " + fname + "：" + (r.error || "未知"), "error");
+            OS.toast(r.error || "保存失败");
+            setStatus("保存失败：" + (r.error || ""));
+            return;
+          }
+          OS.log("editor", "文本已保存到离线空间：/" + fname + " " + ta.value.length + " 字");
+          OS.toast("已存入离线空间：" + fname);
+          setStatus("已保存到离线空间 · " + wordCount());
+        }, function (err) {
+          OS.logerr("editor", err, "保存到离线空间请求异常 " + fname);
+          OS.toast("保存失败：" + (err && err.message));
+          setStatus("保存失败");
         });
       });
     });
@@ -242,8 +295,21 @@
         req = OS.api.smb(Object.assign({}, p.conn, { op: "put", path: p.subPath, content: ta.value }));
       }
       req.then(function (r) {
-        if (r.ok) { OS.toast("已保存回原处"); setStatus("已保存回原处 · " + new Date().toLocaleTimeString()); }
-        else { OS.toast(r.offline ? "电脑/服务器不可达（离线）" : (r.error || "保存失败")); setStatus("保存失败"); }
+        if (r.ok) {
+          OS.log("editor", "远程文档已保存回原处 [" + p.source + "] " + p.path + " " +
+            ta.value.length + " 字");
+          OS.toast("已保存回原处");
+          setStatus("已保存回原处 · " + new Date().toLocaleTimeString());
+        } else {
+          OS.log("editor", "保存回原处失败 [" + p.source + "] " + p.path + "：" +
+            (r.offline ? "(离线/电脑不可达)" : (r.error || "未知")), "error");
+          OS.toast(r.offline ? "电脑/服务器不可达（离线）" : (r.error || "保存失败"));
+          setStatus("保存失败");
+        }
+      }, function (err) {
+        OS.logerr("editor", err, "保存回原处请求异常 [" + p.source + "] " + p.path);
+        OS.toast("保存失败：" + (err && err.message));
+        setStatus("保存失败");
       });
     });
 

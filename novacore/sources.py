@@ -6,6 +6,7 @@ import io
 import json
 import mimetypes
 import os
+import re
 import time
 
 import requests
@@ -339,6 +340,10 @@ def wan_reachable():
 
 
 WEB_MAX_BYTES = 200 * 1024 * 1024   # 外网代取单次上限 200MB，防止内存打满
+# 部分音乐/图床 CDN 按 User-Agent 过滤（酷我音频 CDN 对 python UA 直接 403），
+# 代取时默认携带浏览器 UA，可用参数 ua 覆盖。
+WEB_DEFAULT_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/99.0.4844.51 Safari/537.36")
 
 
 def api_web():
@@ -349,21 +354,31 @@ def api_web():
         url = str(b.get("url", "") or "").strip()
         method = str(b.get("method", "GET") or "GET").upper()
         fwd_body = b.get("data")
+        ua = str(b.get("ua", "") or "").strip()
     else:
         url = str(request.args.get("u") or request.args.get("url") or "").strip()
         method = "GET"
         fwd_body = None
+        ua = str(request.args.get("ua", "") or "").strip()
     if not re.match(r"^https?://", url, re.I):
         return _api_json({"ok": False, "error": "仅支持 http/https 网址"}, 400)
     if method not in ("GET", "POST"):
         return _api_json({"ok": False, "error": "仅支持 GET/POST"}, 400)
     try:
         up = requests.request(method=method, url=url, timeout=(10, 90),
+                              headers={"User-Agent": ua or WEB_DEFAULT_UA},
                               data=(fwd_body.encode("utf-8")
                                     if isinstance(fwd_body, str) else fwd_body),
                               stream=True, allow_redirects=True, verify=False)
     except Exception as e:
         return _api_json({"ok": False, "error": "电脑无法访问该网址：%s" % e}, 502)
+    # 上游失败必须显式报错：曾经 403 也带着空 body 回 200，浏览器端
+    # 会误存一个 0 字节"成功"文件（音乐广场下载空文件就是这个根因）。
+    if up.status_code >= 400:
+        up.close()
+        return _api_json({"ok": False,
+                          "error": "远程服务器返回 HTTP %d" % up.status_code},
+                         502 if up.status_code >= 500 else 403)
 
     chunks, total = [], 0
     too_big = False
@@ -401,8 +416,10 @@ def api_web():
 
 
 def serve_nova_api(rel, method):
-    """挂载点下 api/ 路由分发：fs（本地）/ ftp / smb / web（外网代取）/ ping。"""
-    parts = [p for p in rel.split("/") if p]
+    """挂载点下 api/ 路由分发：fs（本地）/ ftp / smb / web（外网代取）/ music / ping。"""
+    # GET 路径常带 query string（如 api/music/search?src=netease），解析前先去掉
+    path_only = rel.split("?")[0]
+    parts = [p for p in path_only.split("/") if p]
     if not parts:
         return _api_json({"ok": False, "error": "缺少端点"}, 404)
     kind = parts[0].lower()
@@ -415,6 +432,9 @@ def serve_nova_api(rel, method):
         return api_smb(method)
     if kind == "web":
         return api_web()
+    if kind == "music":
+        from novacore import music_api
+        return music_api.music_api(op)
     if kind == "ping":
         return _api_json({"ok": True, "fs_root": fs_root(),
                           "wan": wan_reachable(),

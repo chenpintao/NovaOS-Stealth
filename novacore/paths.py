@@ -1,22 +1,13 @@
 # -*- coding: utf-8 -*-
 """部署路径常量与访问日志。
-Nuitka onefile 编译后 __file__ 位于临时解压目录，必须以 exe 所在目录为 APP_DIR。"""
+本项目直接分发源码（不编译），部署根目录即本文件的上上级目录。"""
 import os
-import sys
 import threading
+import time
 
 
 def app_dir():
-    try:
-        import __compiled__  # noqa: F401  仅 Nuitka 编译产物存在
-        d = os.path.dirname(os.path.abspath(sys.argv[0]))
-        # 工具 exe 可能从 dist/ 拷出单独运行：exe 旁没有 config.json 时退回当前工作目录
-        if not os.path.isfile(os.path.join(d, "config.json")) and os.path.isfile(
-                os.path.join(os.getcwd(), "config.json")):
-            return os.getcwd()
-        return d
-    except Exception:
-        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 APP_DIR = HERE = app_dir()
@@ -45,6 +36,54 @@ def write_access(line):
                 except OSError:
                     pass
             with open(ACCESS_LOG, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+    except OSError:
+        pass
+
+
+# ----------------------------- 统一服务端日志 -----------------------------
+# logs/server-YYYYMMDD.log（按天 + 1MB 轮转 .1），所有模块共用，不另建日志体系。
+# 调试开关（config.json "debug"）关闭时只落 WARN/ERROR；开启后 DEBUG/INFO 全落盘。
+_slog_lock = threading.Lock()
+_slog_state = {"debug": False}
+SLOG_MAX = 1024 * 1024
+_LEVELS = {"debug": 10, "info": 20, "warn": 30, "error": 40}
+
+
+def set_slog_debug(on):
+    _slog_state["debug"] = bool(on)
+
+
+def slog_debug():
+    return _slog_state["debug"]
+
+
+def slog(level, tag, msg=""):
+    """level: debug/info/warn/error；tag: 模块短名（如 music/net/cdp）。"""
+    lv = str(level or "info").lower()
+    if lv not in _LEVELS:
+        lv = "info"
+    # 非调试模式：debug/info 不落盘（error/warn 始终保留，故障可追溯）
+    if _LEVELS[lv] < _LEVELS["warn"] and not _slog_state["debug"]:
+        return
+    line = "%s %-5s [%-6s] %s" % (
+        time.strftime("%Y-%m-%d %H:%M:%S"), lv.upper(), str(tag)[:6], msg)
+    try:
+        print(line, flush=True)
+    except Exception:
+        pass
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        fp = os.path.join(LOG_DIR, "server-%s.log" % time.strftime("%Y%m%d"))
+        with _slog_lock:
+            if os.path.isfile(fp) and os.path.getsize(fp) > SLOG_MAX:
+                try:
+                    if os.path.isfile(fp + ".1"):
+                        os.remove(fp + ".1")
+                    os.rename(fp, fp + ".1")
+                except OSError:
+                    pass
+            with open(fp, "a", encoding="utf-8") as f:
                 f.write(line + "\n")
     except OSError:
         pass

@@ -2,9 +2,22 @@ __pycache__/
 *.pyc
 *.log
 logs/
+backups/
 e2e_profile/
 shot_*.png
 config.json.tmp
 .novabak
 dist/
 build-dist/
+
+# 构建缓存（下载的 embed 包 / get-pip.py）
+build-cache/
+
+# 内嵌便携 Python 运行时（由 build_runtime.ps1 生成，约 40MB，不入库）
+runtime/
+
+# 小说导出目录（运行时生成）
+novel_exports/
+
+# lncrawl 上游参考克隆（仅用于移植站点，含 .git，不入库）
+archive/lncrawl-ref/

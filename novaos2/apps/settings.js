@@ -139,21 +139,38 @@
     function refreshUsage() {
       vUsage.textContent = "统计中…";
       OS.vfs.usage().then(function (u) {
-        if (!u.ok) { vUsage.textContent = u.error || "统计失败"; return; }
+        if (!u.ok) {
+          OS.log("vfs", "离线空间统计失败：" + (u.error || "未知"), "warn");
+          vUsage.textContent = u.error || "统计失败";
+          return;
+        }
         vUsage.textContent = fmtBytes(u.bytes) + " / 约 " + fmtBytes(u.max);
         vCnt.textContent = u.files + " 个文件 · " + u.dirs + " 个文件夹";
         var pct = Math.max(0, Math.min(100, Math.round(u.bytes / u.max * 100)));
         barI.style.width = pct + "%";
-      }, function () { vUsage.textContent = "统计失败"; });
+      }, function (err) {
+        OS.logerr("vfs", err, "离线空间统计异常");
+        vUsage.textContent = "统计失败";
+      });
     }
     btnRefreshVfs.addEventListener("click", refreshUsage);
     btnClearVfs.addEventListener("click", function () {
       OS.dlg.confirm("将删除离线空间中的全部文件与文件夹，且不可恢复。确定继续？", "清空离线空间")
         .then(function (yes) {
           if (!yes) return;
-          OS.vfs.clear().then(function () {
+          OS.log("vfs", "用户确认清空离线空间", "warn");
+          OS.vfs.clear().then(function (r) {
+            if (r && r.ok === false) {
+              OS.log("vfs", "清空离线空间失败：" + (r.error || "未知"), "error");
+              OS.toast("清空失败：" + (r.error || "未知"));
+              return;
+            }
+            OS.log("vfs", "离线空间已清空");
             refreshUsage();
             OS.toast("离线空间已清空");
+          }, function (err) {
+            OS.logerr("vfs", err, "清空离线空间异常");
+            OS.toast("清空失败：" + (err && err.message));
           });
         });
     });
@@ -165,43 +182,191 @@
     var rowSysBtn = OS.h("div", "nv-set-row");
     var spSys = OS.h("span", "nv-set-v");
     var btnSysUpdate = OS.h("button", "nv-btn", "立即更新");
-    var btnSysBackup = OS.h("button", "nv-btn", "下载备份");
+    var btnSysBackup = OS.h("button", "nv-btn", "下载电脑端备份");
+    var btnTabBackup = OS.h("button", "nv-btn primary", "备份平板文件到电脑");
     spSys.appendChild(btnSysUpdate);
     spSys.appendChild(document.createTextNode(" "));
     spSys.appendChild(btnSysBackup);
+    spSys.appendChild(document.createTextNode(" "));
+    spSys.appendChild(btnTabBackup);
     rowSysBtn.appendChild(spSys);
     cardSys.appendChild(rowSysBtn);
+    var vTabProg = OS.h("span", "nv-set-v", "");
+    var rowTabProg = OS.h("div", "nv-set-row");
+    rowTabProg.appendChild(vTabProg);
+    cardSys.appendChild(rowTabProg);
+    /* 音乐歌单单独备份（仅歌单元数据 / 含已下载歌曲） */
+    var rowMusicBtn = OS.h("div", "nv-set-row");
+    var spMusic = OS.h("span", "nv-set-v");
+    var btnMusicPl = OS.h("button", "nv-btn", "备份音乐歌单");
+    var btnMusicPlAudio = OS.h("button", "nv-btn", "备份歌单+歌曲");
+    spMusic.appendChild(btnMusicPl);
+    spMusic.appendChild(document.createTextNode(" "));
+    spMusic.appendChild(btnMusicPlAudio);
+    rowMusicBtn.appendChild(spMusic);
+    cardSys.appendChild(rowMusicBtn);
+    var vMusicProg = OS.h("span", "nv-set-v", "");
+    var rowMusicProg = OS.h("div", "nv-set-row");
+    rowMusicProg.appendChild(vMusicProg);
+    cardSys.appendChild(rowMusicProg);
+    // 调试模式开关
+    var rowDbg = OS.h("div", "nv-set-row");
+    rowDbg.appendChild(OS.h("span", "nv-set-k", "调试模式"));
+    var cbDbg = document.createElement("input");
+    cbDbg.type = "checkbox";
+    cbDbg.className = "nv-checkbox";
+    cbDbg.checked = !!OS.debug.enabled();
+    var vDbg = OS.h("span", "nv-set-v");
+    vDbg.appendChild(cbDbg);
+    rowDbg.appendChild(vDbg);
+    cardSys.appendChild(rowDbg);
     var sysHint = OS.h("div", "nv-set-hint",
       "立即更新：刷新电脑端页面文件的缓存版本号，平板下次打开自动取最新版，无需清缓存。 " +
-      "下载备份：把电脑端 novaos2、配置与入口脚本打包为 zip 下载到本机。");
+      "下载电脑端备份：把电脑端 novaos2、配置与入口脚本打包为 zip。 " +
+      "备份平板文件到电脑：把平板离线空间全部文件（含设置）发送到电脑 backups/tablet/ 目录并打包 zip。 " +
+      "备份音乐歌单：只把音乐广场里的歌单与收藏记录备份到电脑；「备份歌单+歌曲」会连同「音乐」文件夹中已下载的音频一起发送。 " +
+      "调试模式：开启后平板全部功能日志、网络请求与报错会同时写入离线空间「/日志/tablet-日期.log」并实时回传电脑 logs/tablet-日期.log；电脑端服务自身日志在 logs/server-日期.log（由电脑配置 debug 开关控制）。");
     cardSys.appendChild(sysHint);
     page.appendChild(cardSys);
 
     btnSysUpdate.addEventListener("click", function () {
       btnSysUpdate.disabled = true;
       OS.toast("正在检查更新…");
+      OS.log("settings", "用户触发系统更新");
       OS.api.sysUpdate().then(function (r) {
         btnSysUpdate.disabled = false;
         if (r && r.ok) {
+          OS.log("settings", "系统更新完成，刷新版本文件 " + (r.changed || 0) + " 个");
           OS.toast(r.changed > 0 ? "已刷新 " + r.changed + " 个文件版本，重开页面生效" : "已是最新");
         } else {
+          OS.log("settings", "系统更新失败：" + ((r && r.error) || "未知"), "error");
           OS.toast((r && r.error) || "更新失败：电脑服务不可用");
         }
-      }, function () { btnSysUpdate.disabled = false; OS.toast("更新失败"); });
+      }, function (err) {
+        btnSysUpdate.disabled = false;
+        OS.logerr("settings", err, "系统更新请求异常");
+        OS.toast("更新失败");
+      });
     });
     btnSysBackup.addEventListener("click", function () {
       btnSysBackup.disabled = true;
+      OS.log("settings", "用户请求下载电脑端备份");
       OS.api.sysBackupUrl().then(function (url) {
         btnSysBackup.disabled = false;
-        if (!url) { OS.toast("电脑服务不可用（离线模式）"); return; }
+        if (!url) {
+          OS.log("settings", "电脑备份不可用：离线模式无服务通道", "warn");
+          OS.toast("电脑服务不可用（离线模式）");
+          return;
+        }
         var a = document.createElement("a");
         a.href = url;
         a.download = "";
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
+        OS.log("settings", "电脑端备份下载已开始：" + url);
         OS.toast("备份下载已开始");
-      }, function () { btnSysBackup.disabled = false; OS.toast("备份失败"); });
+      }, function (err) {
+        btnSysBackup.disabled = false;
+        OS.logerr("settings", err, "获取电脑备份地址异常");
+        OS.toast("备份失败");
+      });
+    });
+
+    /* 平板离线空间 → 电脑（逐文件发送，电脑端 backups/tablet/ 落盘并打包） */
+    btnTabBackup.addEventListener("click", function () {
+      OS.dlg.confirm(
+        "将把平板「离线空间」中的全部文件（含本系统设置）发送到电脑，\n" +
+        "保存到电脑 backups\\tablet\\ 目录并自动打包 zip。\n" +
+        "请保持与电脑热点连接。确定开始？", "备份平板文件到电脑"
+      ).then(function (yes) {
+        if (!yes) return;
+        btnTabBackup.disabled = true;
+        vTabProg.textContent = "正在统计…";
+        OS.tabletBackup(function (p) {
+          vTabProg.textContent = p.phase === "push"
+            ? "发送中 " + p.index + "/" + p.total + "：" + p.name
+            : (p.phase === "commit" ? "电脑正在打包…" : "准备中…");
+        }).then(function (r) {
+          btnTabBackup.disabled = false;
+          if (r && r.ok && r.result) {
+            var z = r.result;
+            OS.log("settings", "平板备份完成：" + z.files + " 个文件 → " + z.name);
+            vTabProg.textContent = "完成：" + z.files + " 个文件 → backups\\tablet\\" + z.name;
+            OS.toast("平板文件已备份到电脑：" + z.name);
+          } else {
+            OS.log("settings", "平板备份失败：" + ((r && r.error) || "电脑服务不可用"), "error");
+            vTabProg.textContent = "备份失败：" + ((r && r.error) || "电脑服务不可用");
+            OS.toast((r && r.error) || "电脑服务不可用（离线模式）");
+          }
+        }, function (err) {
+          btnTabBackup.disabled = false;
+          OS.logerr("settings", err, "平板备份异常");
+          vTabProg.textContent = "备份失败：" + (err && err.message ? err.message : err);
+          OS.toast("备份失败：" + (err && err.message ? err.message : "未知错误"));
+        });
+      });
+    });
+
+    /* 音乐歌单单独备份：withAudio=false 仅歌单元数据；true 连带 /音乐 下音频 */
+    function doMusicBackup(withAudio, btn) {
+      OS.dlg.confirm(
+        withAudio
+          ? "将把音乐歌单和「音乐」文件夹中已下载的歌曲全部备份到电脑，\n" +
+            "保存到电脑 backups\\tablet\\ 目录（zip 名带 music- 前缀）。\n" +
+            "歌曲较多时耗时较长，请保持与电脑热点连接。确定开始？"
+          : "将把音乐歌单（全部自建分类与收藏记录，不含音频）备份到电脑，\n" +
+            "保存到电脑 backups\\tablet\\ 目录（zip 名带 music- 前缀）。确定开始？",
+        "备份音乐歌单"
+      ).then(function (yes) {
+        if (!yes) return;
+        btn.disabled = true;
+        btnMusicPl.disabled = true;
+        btnMusicPlAudio.disabled = true;
+        vMusicProg.textContent = "正在准备…";
+        OS.musicBackup(withAudio, function (p) {
+          vMusicProg.textContent = p.phase === "push"
+            ? "发送中 " + p.index + "/" + p.total + "：" + p.name
+            : (p.phase === "commit" ? "电脑正在打包…" : "准备中…");
+        }).then(function (r) {
+          btn.disabled = false;
+          btnMusicPl.disabled = false;
+          btnMusicPlAudio.disabled = false;
+          if (r && r.ok && r.result) {
+            var z = r.result;
+            OS.log("settings", "音乐备份完成（含音频=" + (withAudio ? 1 : 0) + "）：" +
+              z.files + " 个文件 → " + z.name);
+            vMusicProg.textContent = "完成：" + z.files + " 个文件 → backups\\tablet\\" + z.name;
+            OS.toast("音乐歌单已备份到电脑：" + z.name);
+          } else {
+            OS.log("settings", "音乐备份失败：" + ((r && r.error) || "电脑服务不可用"), "error");
+            vMusicProg.textContent = "备份失败：" + ((r && r.error) || "电脑服务不可用");
+            OS.toast((r && r.error) || "电脑服务不可用（离线模式）");
+          }
+        }, function (err) {
+          btn.disabled = false;
+          btnMusicPl.disabled = false;
+          btnMusicPlAudio.disabled = false;
+          OS.logerr("settings", err, "音乐备份异常（含音频=" + (withAudio ? 1 : 0) + "）");
+          vMusicProg.textContent = "备份失败：" + (err && err.message ? err.message : err);
+          OS.toast("备份失败：" + (err && err.message ? err.message : "未知错误"));
+        });
+      });
+    }
+    btnMusicPl.addEventListener("click", function () { doMusicBackup(false, btnMusicPl); });
+    btnMusicPlAudio.addEventListener("click", function () { doMusicBackup(true, btnMusicPlAudio); });
+
+    /* 调试模式：立即生效；开启后 console/报错回传电脑并写离线空间 /日志/ */
+    cbDbg.addEventListener("change", function () {
+      if (cbDbg.checked) {
+        OS.debug.enable();
+        OS.log("settings", "用户开启调试模式（日志→离线空间 /日志/ + 电脑 logs/tablet）");
+        OS.toast("调试模式已开启：日志同时写入离线空间 /日志/ 并回传电脑");
+      } else {
+        OS.log("settings", "用户关闭调试模式");
+        OS.debug.disable();
+        OS.toast("调试模式已关闭");
+      }
     });
 
     /* ---------- 关于 ---------- */

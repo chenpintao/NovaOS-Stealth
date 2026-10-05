@@ -100,17 +100,22 @@ def validate(c):
 
     # CDP 远程浏览器画面参数（缺省沿用默认值，不在配置里也不报错）
     cdp_ranges = (("cdp_width", 640, 3840), ("cdp_height", 480, 2160),
-                  ("cdp_quality", 10, 100))
+                  ("cdp_quality", 10, 100), ("cdp_fps", 5, 30))
     for k, lo, hi in cdp_ranges:
         if c.get(k) is not None:
             v = as_int(c.get(k))
             need(v is not None and lo <= v <= hi, k, "需为 %d-%d 的整数" % (lo, hi))
 
+    # 小说下载后端（本机 novelsrc 聚合服务）监听端口
+    if c.get("novel_port") is not None:
+        v = as_int(c.get("novel_port"))
+        need(v is not None and 1 <= v <= 65535, "novel_port", "需为 1-65535 的整数")
+
     if c.get("inject_enable"):
         need(bool(str(c.get("inject_path_pattern", "")).strip()), "inject_path_pattern", "启用注入时为必填")
 
-    # 局域网代理模式：不启 DNS，跳过 DNS 必填校验
-    if not c.get("lan_mode") and c.get("dns_enable"):
+    # DNS 应答（热点劫持 / 局域网代理两种模式下都可能启用）
+    if c.get("dns_enable"):
         doms = c.get("hijack_domains")
         need(isinstance(doms, list) and all(isinstance(d, str) and d.strip() for d in doms),
              "hijack_domains", "启用 DNS 时至少填一个域名")

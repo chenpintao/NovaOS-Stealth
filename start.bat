@@ -8,7 +8,7 @@ rem Band: 2.4GHz / 5GHz / Auto
 set "HOTSPOT_BAND=2.4GHz"
 rem ===============================================================================
 
-rem Use /nohotspot to skip hotspot control (LAN / manual DNS mode)
+rem Use /nohotspot for LAN mode (no hotspot; tablet's Wi-Fi DNS points at this PC)
 set "NO_HOTSPOT=0"
 if /i "%~1"=="/nohotspot" set "NO_HOTSPOT=1"
 
@@ -22,20 +22,31 @@ if %errorlevel% neq 0 (
 
 cd /d "%~dp0"
 
+rem ---- Interpreter: prefer the bundled portable runtime, else system Python ----
+rem The bundled runtime already contains every dependency, so the target PC
+rem needs no Python and no online pip install.
+set "PYEXE=runtime\python\python.exe"
+if not exist "%PYEXE%" set "PYEXE=python"
+
 echo [1/4] Checking Python dependencies...
+if /i not "%PYEXE%"=="python" goto :deps_ok
+rem No bundled runtime (source/dev machine): use system Python + pip
 python -m pip install -r requirements.txt
 if %errorlevel% neq 0 (
     echo Dependency installation failed. Make sure Python 3 is installed and the PC is online.
     pause
     exit /b 1
 )
+:deps_ok
+
+echo [2/4] Opening firewall for incoming UDP 53 / TCP 80...
+rem UDP 53 is needed in both modes: hotspot DNS hijack, or LAN mode where the
+rem tablet's Wi-Fi DNS is pointed at this PC.
+netsh advfirewall firewall delete rule name="NovaStealth DNS/HTTP" >nul 2>&1
+netsh advfirewall firewall add rule name="NovaStealth DNS/HTTP" dir=in action=allow protocol=UDP localport=53 >nul
+netsh advfirewall firewall add rule name="NovaStealth DNS/HTTP" dir=in action=allow protocol=TCP localport=80 >nul
 
 if "%NO_HOTSPOT%"=="0" (
-    echo [2/4] Opening firewall for incoming UDP 53 / TCP 80...
-    netsh advfirewall firewall delete rule name="NovaStealth DNS/HTTP" >nul 2>&1
-    netsh advfirewall firewall add rule name="NovaStealth DNS/HTTP" dir=in action=allow protocol=UDP localport=53 >nul
-    netsh advfirewall firewall add rule name="NovaStealth DNS/HTTP" dir=in action=allow protocol=TCP localport=80 >nul
-
     echo [3/4] Configuring and starting PC hotspot: %HOTSPOT_SSID%
     rem Changing SSID/password requires: stop hotspot -> write registry -> start hotspot
     powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0disable-hotspot.ps1" -NonInteractive
@@ -53,17 +64,14 @@ if "%NO_HOTSPOT%"=="0" (
     echo     Hotspot pass : %HOTSPOT_PWD%
     echo     Connect phone/tablet to this hotspot, then open the column page as usual.
 ) else (
-    echo [2/4] Hotspot control skipped (/nohotspot)
+    echo [3/4] Hotspot control skipped (/nohotspot = LAN mode)
+    echo     LAN mode: set the tablet Wi-Fi DNS to this PC's LAN IP, then open
+    echo     the column page as usual. (The IP is printed below on startup.)
 )
 
 echo [4/4] Starting DNS + HTTP injection service...
 echo ============================================================
-rem Prefer Nuitka single-file build; fall back to python source.
-if exist "dist\novaosd.exe" (
-    "dist\novaosd.exe"
-) else (
-    python novaosd.py
-)
+"%PYEXE%" -X utf8 novaosd.py
 echo.
 echo Service stopped. Run stop-hotspot.bat to turn off the PC hotspot.
 pause

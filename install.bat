@@ -3,12 +3,12 @@ setlocal
 cd /d "%~dp0"
 
 rem Tzy OS installer entry.
-rem Prefer the Nuitka-compiled single-file build; fall back to python source.
+rem Interpreter: prefer the bundled portable runtime (target PC needs no
+rem Python), else fall back to system Python.
 
-if exist "dist\nova-setup.exe" (
-    "dist\nova-setup.exe" %*
-) else (
-    python tools\nova_setup.py %*
-)
+set "PYEXE=runtime\python\python.exe"
+if not exist "%PYEXE%" set "PYEXE=python"
+
+"%PYEXE%" -X utf8 tools\nova_setup.py %*
 
 if errorlevel 1 pause

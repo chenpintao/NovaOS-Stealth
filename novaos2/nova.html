@@ -7,7 +7,7 @@
 <!-- 极简网页 OS · Loshop & Cpt -->
 <!-- nova.html：新入口（旧 os.html 已被缓存投毒一年不回源，故换新名零清缓存升级） -->
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="os.css?v=1790944872">
+<link rel="stylesheet" href="os.css?v=1791105873">
 </head>
 <body>
 
@@ -71,16 +71,20 @@
 
 <!-- WinBox（纯本地依赖，bundle 内含样式） -->
 <script src="lib/winbox.bundle.min.js"></script>
+<!-- 文档查看器依赖（pdf.js / mammoth / JSZip，均自托管离线可用） -->
+<script src="lib/preview/pdf.min.js?v=1791017166"></script>
+<script src="lib/preview/mammoth.browser.min.js?v=1791017168"></script>
+<script src="lib/preview/jszip.min.js?v=1791017169"></script>
 <!-- OS 核心 -->
-<script src="os.js?v=1790944872"></script>
-<!-- 应用（注册即上桌面；?v=2 为破缓存版本号） -->
-<script src="apps/editor.js?v=1790944873"></script>
-<script src="apps/files.js?v=1790944873"></script>
-<script src="apps/calc.js?v=1790944873"></script>
-<script src="apps/settings.js?v=1790944874"></script>
-<script src="apps/media.js?v=1790944874"></script>
-<script src="apps/phi.js?v=1790944874"></script>
-<script src="apps/vbrowser.js?v=1790944875"></script>
+<script src="os.js?v=1791098268"></script>
+<!-- 应用（注册即上桌面；?v= 为破缓存版本号。phi/vbrowser 已改为商店预装包，可卸载） -->
+<script src="apps/editor.js?v=1791104761"></script>
+<script src="apps/files.js?v=1791107077"></script>
+<script src="apps/calc.js?v=1791016060"></script>
+<script src="apps/settings.js?v=1791098516"></script>
+<script src="apps/media.js?v=1791104703"></script>
+<script src="apps/store.js?v=1791107572"></script>
+<script src="apps/preview.js?v=1791098988"></script>
 <script>/* 启动 */ window.OS && window.OS.boot();</script>
 </body>
 </html>

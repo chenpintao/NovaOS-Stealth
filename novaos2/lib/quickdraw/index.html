@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>画板 · Tzy OS</title>
+<link rel="stylesheet" href="core/quickdraw.css" />
+<style>
+  /* Tzy OS 画板外壳（Loshop & Cpt）。引擎样式见 core/quickdraw.css */
+  html, body { margin: 0; height: 100%; overflow: hidden;
+    font-family: "Microsoft YaHei", system-ui, sans-serif; }
+  #board { position: fixed; inset: 0; }
+
+  /* 左上角：离线空间存取条（水印在右下角，互不遮挡） */
+  .qd-tzy-bar {
+    position: fixed; top: 10px; left: 10px; z-index: 50;
+    display: -webkit-box; display: flex; gap: 8px;
+  }
+  .qd-tzy-bar button {
+    font: 500 13px "Microsoft YaHei", system-ui, sans-serif;
+    padding: 7px 14px; border-radius: 999px; cursor: pointer;
+    border: 1px solid rgba(0,0,0,.15); background: rgba(255,255,255,.94);
+    color: #211d14; -webkit-tap-highlight-color: transparent;
+  }
+  .qd-tzy-bar button:active { background: #eee; }
+  .qd-root[data-qd-theme='dark'] ~ .qd-tzy-bar button {
+    /* 深色主题下由 JS 切 data 属性覆盖（见下） */
+  }
+  body.qd-night .qd-tzy-bar button {
+    background: rgba(38,35,30,.92); color: #f4f2ea; border-color: rgba(255,255,255,.18);
+  }
+
+  /* 离线作品浮层 */
+  .qd-mask {
+    position: fixed; inset: 0; z-index: 60;
+    background: rgba(20,18,14,.42);
+    display: -webkit-box; display: flex;
+    -webkit-box-align: center; align-items: center;
+    -webkit-box-pack: center; justify-content: center;
+  }
+  .qd-mask.qd-hidden { display: none; }
+  .qd-dlg {
+    width: 82%; max-width: 420px; max-height: 70vh;
+    background: #fff; color: #211d14; border-radius: 14px;
+    display: -webkit-box; display: flex; -webkit-box-orient: vertical;
+    flex-direction: column; overflow: hidden;
+    box-shadow: 0 14px 44px rgba(0,0,0,.28);
+  }
+  body.qd-night .qd-dlg { background: #2a2620; color: #f4f2ea; }
+  .qd-dlg-head { padding: 14px 16px 6px; font-size: 15px; font-weight: 600; }
+  .qd-dlg-body { padding: 8px 16px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .qd-dlg-foot { padding: 10px 16px 14px; display: -webkit-box; display: flex;
+    -webkit-box-pack: end; justify-content: flex-end; gap: 8px; }
+  .qd-dlg-foot button {
+    font: 13px "Microsoft YaHei", system-ui; padding: 7px 16px;
+    border-radius: 9px; border: 1px solid rgba(0,0,0,.18);
+    background: #f3f0e8; color: #211d14; cursor: pointer;
+  }
+  body.qd-night .qd-dlg-foot button { background: #3a352d; color: #f4f2ea;
+    border-color: rgba(255,255,255,.2); }
+  .qd-dlg-foot button.qd-primary { background: #5b3fd6; color: #fff; border-color: #5b3fd6; }
+  .qd-dlg input {
+    width: 100%; box-sizing: border-box; padding: 9px 10px;
+    font: 14px "Microsoft YaHei", system-ui; border-radius: 8px;
+    border: 1px solid rgba(0,0,0,.2); background: #fff; color: #211d14;
+  }
+  body.qd-night .qd-dlg input { background: #1c1915; color: #f4f2ea;
+    border-color: rgba(255,255,255,.22); }
+  .qd-file-row {
+    padding: 10px 8px; border-radius: 8px; cursor: pointer;
+    display: -webkit-box; display: flex; -webkit-box-align: center; align-items: center;
+  }
+  .qd-file-row:active { background: rgba(91,63,214,.12); }
+  .qd-file-row .qd-ic { margin-right: 8px; }
+  .qd-file-row .qd-nm { -webkit-box-flex: 1; flex: 1; overflow: hidden;
+    white-space: nowrap; text-overflow: ellipsis; }
+  .qd-file-row .qd-sz { color: #9a9388; font-size: 12px; margin-left: 8px; }
+  .qd-empty { padding: 18px 8px; text-align: center; color: #9a9388; font-size: 13px; }
+  .qd-toast {
+    position: fixed; left: 50%; bottom: 84px; -webkit-transform: translateX(-50%);
+    transform: translateX(-50%); z-index: 70; max-width: 84%;
+    background: rgba(20,18,14,.92); color: #fff; font-size: 13.5px;
+    padding: 10px 18px; border-radius: 999px; pointer-events: none;
+    opacity: 0; -webkit-transition: opacity .18s; transition: opacity .18s;
+    text-align: center;
+  }
+  .qd-toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+  <div id="board"></div>
+
+  <div class="qd-tzy-bar">
+    <button id="btnSave" type="button">💾 存到离线</button>
+    <button id="btnOpen" type="button">📂 离线作品</button>
+  </div>
+
+  <div class="qd-mask qd-hidden" id="mask">
+    <div class="qd-dlg">
+      <div class="qd-dlg-head" id="dlgHead">离线作品</div>
+      <div class="qd-dlg-body" id="dlgBody"></div>
+      <div class="qd-dlg-foot">
+        <button type="button" id="btnCancel">取消</button>
+        <button type="button" id="btnOk" class="qd-primary">确定</button>
+      </div>
+    </div>
+  </div>
+  <div class="qd-toast" id="toast"></div>
+
+  <script>
+  /* roundRect 兜底：Chromium 99 才内置，更旧内核没有，补一个等效实现。
+     与规范同名同参，引擎原有调用无需改动。Loshop & Cpt */
+  (function () {
+    if (typeof CanvasRenderingContext2D !== "undefined" &&
+        !CanvasRenderingContext2D.prototype.roundRect) {
+      CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+        if (typeof r === "number") r = [r, r, r, r];
+        else if (!r) r = [0, 0, 0, 0];
+        var tl = r[0], tr = r[1], br = r[2], bl = r[3];
+        var m = Math.min(w / 2, h / 2);
+        tl = Math.min(tl, m); tr = Math.min(tr, m); br = Math.min(br, m); bl = Math.min(bl, m);
+        this.beginPath();
+        this.moveTo(x + tl, y);
+        this.lineTo(x + w - tr, y);
+        this.arcTo(x + w, y, x + w, y + tr, tr);
+        this.lineTo(x + w, y + h - br);
+        this.arcTo(x + w, y + h, x + w - br, y + h, br);
+        this.lineTo(x + bl, y + h);
+        this.arcTo(x, y + h, x, y + h - bl, bl);
+        this.lineTo(x, y + tl);
+        this.arcTo(x, y, x + tl, y, tl);
+        this.closePath();
+        return this;
+      };
+    }
+  })();
+  </script>
+
+  <script type="module">
+  import { createQuickdraw } from './core/index.js'
+
+  /* ---------------- 画板初始化 ---------------- */
+  var board = createQuickdraw({
+    container: document.getElementById('board'),
+    theme: 'light',
+    grid: 'lines',
+    themeToggle: true,
+    gridControl: true
+  })
+  var editor = board.editor
+
+  // 跟随引擎主题切换外壳浮层配色
+  editor.on('theme', function () {
+    document.body.classList.toggle('qd-night', editor.theme.id === 'dark')
+  })
+
+  /* ---------------- 本地自动存档（防丢失） ---------------- */
+  var AUTO_KEY = 'nova2.qdraw.autosave'
+  var autoTimer = 0
+  try {
+    var saved = localStorage.getItem(AUTO_KEY)
+    if (saved) {
+      editor.store.loadSnapshot(JSON.parse(saved), 'remote')
+      editor.fitContent()
+    }
+  } catch (e) { /* 存档损坏不阻塞启动 */ }
+  editor.store.listen(function () {
+    clearTimeout(autoTimer)
+    autoTimer = setTimeout(function () {
+      try { localStorage.setItem(AUTO_KEY, JSON.stringify(editor.store.getSnapshot())) }
+      catch (e) { /* 容量满等原因忽略，仍可手动存离线 */ }
+    }, 500)
+  })
+
+  /* ---------------- Tzy OS 离线空间桥（postMessage） ----------------
+   * 由应用外壳 main.js 监听并读写 VFS 的 /画板 目录；
+   * 独立打开本页（无外壳）时按钮给出提示。 */
+  var BRIDGE = 'qd-tzy-v1'
+  function bridge(msg) {
+    return new Promise(function (resolve) {
+      var done = false
+      function onReply(ev) {
+        var d = ev.data
+        if (!d || d.__qd !== BRIDGE || d.op !== msg._reply) return
+        done = true
+        window.removeEventListener('message', onReply)
+        resolve(d)
+      }
+      window.addEventListener('message', onReply)
+      window.parent.postMessage(Object.assign({ __qd: BRIDGE }, msg), '*')
+      setTimeout(function () {
+        if (!done) {
+          done = true
+          window.removeEventListener('message', onReply)
+          resolve({ ok: false, error: 'no-host' })
+        }
+      }, 4000)
+    })
+  }
+
+  var toastEl = document.getElementById('toast')
+  var toastTimer = 0
+  function toast(s) {
+    toastEl.textContent = s
+    toastEl.classList.add('show')
+    clearTimeout(toastTimer)
+    toastTimer = setTimeout(function () { toastEl.classList.remove('show') }, 2200)
+  }
+
+  var mask = document.getElementById('mask')
+  var dlgHead = document.getElementById('dlgHead')
+  var dlgBody = document.getElementById('dlgBody')
+  var btnOk = document.getElementById('btnOk')
+  var btnCancel = document.getElementById('btnCancel')
+  var mode = ''
+
+  function closeDlg() {
+    mask.classList.add('qd-hidden')
+    mode = ''
+    dlgBody.innerHTML = ''
+    btnOk.style.display = ''
+  }
+  mask.addEventListener('click', function (e) { if (e.target === mask) closeDlg() })
+  btnCancel.addEventListener('click', closeDlg)
+
+  function fmtSize(n) {
+    n = n || 0
+    if (n < 1024) return n + ' B'
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
+    return (n / 1024 / 1024).toFixed(2) + ' MB'
+  }
+
+  /* ---- 存到离线：输入作品名（默认 画板-日期时间） ---- */
+  document.getElementById('btnSave').addEventListener('click', function () {
+    mode = 'save'
+    dlgHead.textContent = '存到离线空间（/画板）'
+    dlgBody.innerHTML = ''
+    var input = document.createElement('input')
+    input.type = 'text'
+    var d = new Date()
+    function p2(n) { return (n < 10 ? '0' : '') + n }
+    input.value = '画板-' + d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate()) +
+      '-' + p2(d.getHours()) + p2(d.getMinutes())
+    dlgBody.appendChild(input)
+    btnOk.textContent = '保存'
+    btnOk.onclick = function () {
+      var name = (input.value || '').trim().replace(/[\\/]/g, '')
+      if (!name) { toast('请输入作品名'); return }
+      if (!/\.qd\.json$/i.test(name)) name += '.qd.json'
+      btnOk.disabled = true
+      var json = JSON.stringify(editor.store.getSnapshot())
+      bridge({ _reply: 'saved', op: 'save', name: name, json: json }).then(function (r) {
+        btnOk.disabled = false
+        if (r.ok) { closeDlg(); toast('已保存：' + name) }
+        else if (r.error === 'no-host') { toast('请在 Tzy OS 内使用离线存储') }
+        else { toast('保存失败：' + (r.error || '未知错误')) }
+      })
+    }
+    mask.classList.remove('qd-hidden')
+    setTimeout(function () { input.focus() }, 60)
+  })
+
+  /* ---- 从离线打开：列出 /画板 下的作品 ---- */
+  document.getElementById('btnOpen').addEventListener('click', function () {
+    mode = 'open'
+    dlgHead.textContent = '离线作品（/画板）'
+    btnOk.style.display = 'none'
+    dlgBody.innerHTML = '<div class="qd-empty">正在读取…</div>'
+    mask.classList.remove('qd-hidden')
+    bridge({ _reply: 'listed', op: 'list' }).then(function (r) {
+      dlgBody.innerHTML = ''
+      if (r.error === 'no-host') {
+        dlgBody.innerHTML = '<div class="qd-empty">请在 Tzy OS 内打开本应用</div>'
+        return
+      }
+      if (!r.ok) {
+        dlgBody.innerHTML = '<div class="qd-empty">读取失败：' +
+          String(r.error || '').replace(/[<>&]/g, '') + '</div>'
+        return
+      }
+      var files = r.files || []
+      if (!files.length) {
+        dlgBody.innerHTML = '<div class="qd-empty">还没有保存的作品，画完点左上角「💾 存到离线」</div>'
+        return
+      }
+      files.forEach(function (f) {
+        var row = document.createElement('div')
+        row.className = 'qd-file-row'
+        var ic = document.createElement('span')
+        ic.className = 'qd-ic'
+        ic.textContent = '🎨'
+        var nm = document.createElement('span')
+        nm.className = 'qd-nm'
+        nm.textContent = f.name
+        var sz = document.createElement('span')
+        sz.className = 'qd-sz'
+        sz.textContent = fmtSize(f.size)
+        row.appendChild(ic); row.appendChild(nm); row.appendChild(sz)
+        row.addEventListener('click', function () { openOne(f.name) })
+        dlgBody.appendChild(row)
+      })
+    })
+  })
+
+  function openOne(name) {
+    dlgBody.innerHTML = '<div class="qd-empty">正在打开「' +
+      String(name).replace(/[<>&]/g, '') + '」…</div>'
+    bridge({ _reply: 'opened', op: 'open', name: name }).then(function (r) {
+      if (r.ok && r.json) {
+        try {
+          editor.store.loadSnapshot(JSON.parse(r.json), 'remote')
+          editor.fitContent()
+          try { localStorage.setItem(AUTO_KEY, r.json) } catch (e) { }
+          closeDlg()
+          toast('已打开：' + name)
+        } catch (e) {
+          dlgBody.innerHTML = '<div class="qd-empty">作品解析失败：' +
+            String(e && e.message || e).replace(/[<>&]/g, '') + '</div>'
+        }
+      } else if (r.error === 'no-host') {
+        toast('请在 Tzy OS 内使用离线存储')
+      } else {
+        dlgBody.innerHTML = '<div class="qd-empty">打开失败：' +
+          String(r.error || '').replace(/[<>&]/g, '') + '</div>'
+      }
+    })
+  }
+  </script>
+</body>
+</html>

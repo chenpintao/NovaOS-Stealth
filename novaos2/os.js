@@ -204,7 +204,12 @@
       }).then(function (r) { return r.json(); }).then(function (j) {
         clearTimeout(timer);
         resolve(j && j.ok ? { base: base, info: j } : null);
-      }).catch(function () { clearTimeout(timer); resolve(null); });
+      }).catch(function (e) {
+        clearTimeout(timer);
+        try { nvLog("debug", "net", "ping 失败 " + (base || "(同源)") + " | " + (e && e.message)); }
+        catch (_) { }
+        resolve(null);
+      });
     });
   }
 
@@ -217,6 +222,8 @@
       var saved = Store.get(BASE_KEY, "");
       if (saved && list.indexOf(saved) < 0) list.push(saved);
       lanCandidates().forEach(function (b) { if (list.indexOf(b) < 0) list.push(b); });
+      try { nvLog("debug", "net", "开始探测电脑服务，候选 " + list.length + " 个：" +
+        list.map(function (b) { return b || "(同源)"; }).join(", ")); } catch (_) { }
 
       function next(i) {
         if (i >= list.length) return Promise.resolve(null);
@@ -228,6 +235,10 @@
           NET.base = res.base;
           NET.info = res.info;
           Store.set(BASE_KEY, res.base);
+          try { nvLog("info", "net", "电脑服务就绪：" + (res.base || "(同源)") +
+            " wan=" + (res.info.wan ? 1 : 0) + " answer=" + res.info.answer); } catch (_) { }
+        } else {
+          try { nvLog("warn", "net", "全部候选不可达，进入离线模式"); } catch (_) { }
         }
         NET.probing = null;
         var ws = NET.waiters; NET.waiters = [];
@@ -321,11 +332,448 @@
     ping: function () { return netCall("api/ping", {}); },
     // 系统维护（走挂载点同源端点，平板与电脑均可调用）
     sysUpdate: function () { return netCall("sys/update", {}); },
+    sysLog: function (logs) { return netCall("sys/log", { logs: logs }); },
     sysBackupUrl: function () {
       if (NET.base) return Promise.resolve(NET.base + "sys/backup");
       return netProbe(false).then(function (p) { return p ? p.base + "sys/backup" : null; });
     }
   };
+
+  /* ---------------- 调试模式：统一日志器 + console/异常/网络全采集 ----------------
+   * 开关存 localStorage（nova2.debug），开启后：
+   *   1) 日志批量 POST 到 sys/log，电脑端按天落 logs/tablet-YYYYMMDD.log
+   *   2) 同时追加写入平板离线空间 /日志/tablet-YYYYMMDD.log（256KB 截断，断网也能查）
+   *   3) 自动包装 fetch / XMLHttpRequest，所有网络请求的状态码/耗时/失败自动入日志
+   *   4) 捕获未处理异常、Promise reject、资源加载失败
+   * 系统与所有应用统一用 OS.log(tag,msg,level) / OS.logerr(tag,err,ctx) 打点。
+   * 离线时日志暂存缓冲，联网后补传。 */
+  var DEBUG_KEY = "nova2.debug";
+  var dbg = { on: false, buf: [], sending: false, timer: 0, orig: {} };
+  var consoleOrig = {
+    log: console.log.bind(console), info: (console.info || console.log).bind(console),
+    warn: (console.warn || console.log).bind(console),
+    error: (console.error || console.log).bind(console),
+    debug: (console.debug || console.log).bind(console)
+  };
+
+  function dbgNow() {
+    var d = new Date(), p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds()) +
+           "." + ("00" + d.getMilliseconds()).slice(-3);
+  }
+  function dbgFmt(level, tag, args) {
+    var parts = [];
+    for (var i = 0; i < args.length; i++) {
+      var a = args[i];
+      if (typeof a === "string" || a == null) parts.push(String(a));
+      else if (a instanceof Error)
+        parts.push(a.name + ": " + a.message + (a.stack ? " @" + String(a.stack).split("\n")[1] : ""));
+      else {
+        try { parts.push(JSON.stringify(a)); }
+        catch (e) { parts.push(String(a)); }
+      }
+    }
+    return dbgNow() + " " + level + " [" + tag + "] " + parts.join(" ");
+  }
+
+  function dbgSchedule() {
+    if (!dbg.timer) dbg.timer = setInterval(dbgFlush, 3000);
+  }
+  function dbgPush(level, args) {
+    // 应用直接 console.xxx 的原始行（无 tag，tag 位用 "-"）
+    dbgEmit(level, "-", Array.prototype.slice.call(args));
+  }
+  function dbgEmit(level, tag, args) {
+    var line = dbgFmt(level, tag, args);
+    try { (consoleOrig[level] || consoleOrig.log)(line); } catch (e) { }
+    if (!dbg.on) return;
+    if (dbg.buf.length >= 400) dbg.buf.shift();
+    dbg.buf.push(line);
+    dbgSchedule();
+    dbgFilePush(line);
+  }
+  // 全系统统一打点入口
+  function nvLog(level, tag) {
+    dbgEmit(level, tag, Array.prototype.slice.call(arguments, 2));
+  }
+  function nvErr(tag, err, ctx) {
+    var msg = (ctx ? ctx + " | " : "") +
+              (err && err.message ? (err.name || "Error") + ": " + err.message : String(err));
+    if (err && err.stack) msg += " | " + String(err.stack).split("\n").slice(1, 3).join(" <- ");
+    dbgEmit("error", tag, [msg]);
+  }
+  function dbgFlush() {
+    if (dbg.sending || !dbg.buf.length) return;
+    var batch = dbg.buf.splice(0, Math.min(100, dbg.buf.length));
+    dbg.sending = true;
+    netCall("sys/log", { logs: batch }).then(function () {
+      dbg.sending = false;
+      if (dbg.buf.length) dbgFlush();
+    }, function () {
+      dbg.sending = false;
+      dbg.buf = batch.concat(dbg.buf).slice(-400);   // 发送失败保留，稍后重试
+    });
+  }
+
+  /* ---------- 日志同步落盘：离线空间 /日志/tablet-YYYYMMDD.log ---------- */
+  var LOG_DIR_VFS = "/日志";
+  var dbgFile = { pending: [], writing: false, fails: 0, timer: 0 };
+  function dbgFileDay() {
+    var d = new Date(), p = function (n) { n = "" + n; while (n.length < 2) n = "0" + n; return n; };
+    return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate());
+  }
+  function dbgFilePush(line) {
+    dbgFile.pending.push(line);
+    if (dbgFile.pending.length >= 50) dbgFileFlush();
+    else if (!dbgFile.timer) dbgFile.timer = setInterval(dbgFileTick, 2000);
+  }
+  function dbgFileTick() {
+    if (dbgFile.pending.length) dbgFileFlush();
+  }
+  function dbgFileFlush() {
+    if (dbgFile.writing || !dbgFile.pending.length) return;
+    var batch = dbgFile.pending.splice(0, 50);
+    dbgFile.writing = true;
+    var name = "tablet-" + dbgFileDay() + ".log";
+    var path = LOG_DIR_VFS + "/" + name;
+    vfs.get(path)["catch"](function () { return { ok: false }; }).then(function (g) {
+      var prev = (g && g.ok && g.text !== undefined && g.text !== null) ? g.text : "";
+      var text = prev + (prev && prev.charAt(prev.length - 1) !== "\n" ? "\n" : "") +
+                 batch.join("\n") + "\n";
+      if (text.length > 262144) text = text.slice(text.length - 204800);  // 256KB 留尾部
+      return vfs.put(path, { name: name, text: text }).then(function (r) {
+        dbgFile.writing = false;
+        dbgFile.fails = 0;
+        if (r && r.ok === false) throw new Error(r.error || "vfs.put 失败");
+        if (dbgFile.pending.length) dbgFileFlush();
+      });
+    })["catch"](function (e) {
+      dbgFile.writing = false;
+      dbgFile.pending = batch.concat(dbgFile.pending).slice(-400);
+      if (dbgFile.fails++ < 2) consoleOrig.error("[日志] 离线空间写入失败：", e && e.message);
+    });
+  }
+  // 清理 3 天前的本地日志文件（仅按文件名日期判断）
+  function dbgFileGc() {
+    try {
+      var keep = dbgFileDay();
+      vfs.list(LOG_DIR_VFS).then(function (r) {
+        if (!r.ok) return;
+        (r.entries || []).forEach(function (en) {
+          var m = /^tablet-(\d{8})\.log$/.exec(en.name || "");
+          if (m && m[1] < keep - 2) {   // 字符串日期可直接比大小，留 3 天
+            vfs.del(LOG_DIR_VFS + "/" + en.name)["catch"](function () { });
+          }
+        });
+      })["catch"](function () { });
+    } catch (e) { }
+  }
+
+  /* ---------- 网络自动埋点（开关开启才真正记录，关时仅一次布尔判断） ---------- */
+  function dbgInstallFetch() {
+    if (window.__nvFetchPatched || !window.fetch) return;
+    window.__nvFetchPatched = true;
+    var of = window.fetch.bind(window);
+    window.fetch = function (input, init) {
+      var url = (typeof input === "string") ? input : ((input && input.url) || "?");
+      var method = ((init && init.method) ||
+        (typeof input !== "string" && input && input.method) || "GET").toUpperCase();
+      var skip = url.indexOf("sys/log") >= 0;
+      var t0 = Date.now();
+      return of(input, init).then(function (r) {
+        if (dbg.on && !skip)
+          nvLog(r.status >= 400 ? "warn" : "debug", "net",
+                method + " " + r.status + " " + (Date.now() - t0) + "ms " + url.slice(0, 180));
+        return r;
+      }, function (e) {
+        if (dbg.on && !skip)
+          nvLog("error", "net", method + " 失败 " + url.slice(0, 180) + " | " + (e && e.message));
+        throw e;
+      });
+    };
+  }
+  function dbgInstallXHR() {
+    if (window.__nvXhrPatched || !window.XMLHttpRequest) return;
+    window.__nvXhrPatched = true;
+    var O = XMLHttpRequest, op = O.prototype.open, osend = O.prototype.send;
+    O.prototype.open = function (m, u) { this.__nvM = m; this.__nvU = u; return op.apply(this, arguments); };
+    O.prototype.send = function () {
+      var x = this, t0 = Date.now(), u = String(x.__nvU || "?"), skip = u.indexOf("sys/log") >= 0;
+      x.addEventListener("loadend", function () {
+        if (dbg.on && !skip)
+          nvLog(x.status >= 400 ? "warn" : "debug", "xhr",
+                x.__nvM + " " + x.status + " " + (Date.now() - t0) + "ms " + u.slice(0, 180));
+      });
+      x.addEventListener("error", function () {
+        if (dbg.on && !skip) nvLog("error", "xhr", x.__nvM + " 失败 " + u.slice(0, 180));
+      });
+      return osend.apply(this, arguments);
+    };
+  }
+  function dbgBanner() {
+    try {
+      nvLog("info", "boot", "===== 调试模式启动 =====");
+      nvLog("info", "boot", "页面 " + location.href);
+      nvLog("info", "boot", "UA " + navigator.userAgent);
+      nvLog("info", "boot", "屏幕 " + screen.width + "x" + screen.height +
+        " 视口 " + window.innerWidth + "x" + window.innerHeight +
+        " 在线 " + (navigator.onLine ? "是" : "否"));
+      nvLog("info", "boot", "时间 " + new Date().toString());
+    } catch (e) { }
+  }
+
+  function dbgEnable() {
+    if (dbg.on) return;
+    dbg.on = true;
+    ["log", "info", "warn", "error", "debug"].forEach(function (lv) {
+      var orig = (console[lv] || console.log).bind(console);
+      dbg.orig[lv] = orig;
+      console[lv] = function () {
+        try { dbgPush(lv, arguments); } catch (e) { }
+        return orig.apply(null, arguments);
+      };
+    });
+    dbgInstallFetch();
+    dbgInstallXHR();
+    window.addEventListener("error", function (e) {
+      if (!dbg.on) return;
+      if (e.message) {
+        dbgPush("error", ["[未捕获错误] " + (e.message || "(未知)") + " @ " +
+          (e.filename || "") + ":" + (e.lineno || 0) + ":" + (e.colno || 0)]);
+      }
+    });
+    // 资源（img/script/link/audio…）加载失败只在捕获阶段能拿到
+    window.addEventListener("error", function (e) {
+      if (!dbg.on) return;
+      var t = e.target;
+      if (t && t !== window && (t.src || t.href))
+        dbgPush("error", ["[资源加载失败] " + (t.tagName || "?") + " " + (t.src || t.href)]);
+    }, true);
+    window.addEventListener("unhandledrejection", function (e) {
+      if (!dbg.on) return;
+      var r = e.reason;
+      dbgPush("error", ["[未处理Promise] " + ((r && (r.stack || r.message)) || String(r))]);
+    });
+    dbgInstallFetch(); dbgInstallXHR();
+    dbgBanner();
+    dbgFileGc();
+    dbgPush("info", ["[debug] 调试模式已开启：日志回传电脑 + 写入离线空间 /日志/"]);
+    dbgSchedule();
+  }
+  function dbgDisable() {
+    if (!dbg.on) return;
+    nvLog("info", "boot", "调试模式关闭，刷写剩余日志");
+    dbgFlush();
+    dbgFileFlush();
+    Object.keys(dbg.orig).forEach(function (lv) { console[lv] = dbg.orig[lv]; });
+    dbg.orig = {};
+    dbg.on = false;
+  }
+  var debugApi = {
+    enabled: function () { return dbg.on; },
+    enable: function () { Store.set(DEBUG_KEY, true); dbgEnable(); },
+    disable: function () { Store.set(DEBUG_KEY, false); dbgDisable(); }
+  };
+
+  /* ---------------- 平板离线空间备份到电脑 ----------------
+   * 递归遍历 VFS → sys/vfs-begin → 逐文件二进制 push → commit 打包。
+   * onProgress({phase, index, total, name}) 供界面显示进度。 */
+  function netPostRaw(rel, blob) {
+    function attempt(base, tries) {
+      return fetch(base + rel, { method: "POST", body: blob })
+        .then(function (r) { return r.json().catch(function () { return null; }); })
+        .catch(function () { return null; })
+        .then(function (j) {
+          if (j) return j;
+          if (tries < 1) {
+            return netProbe(true).then(function (p) {
+              return p ? attempt(p.base, tries + 1) : OFFLINE;
+            });
+          }
+          return OFFLINE;
+        });
+    }
+    if (NET.base) return attempt(NET.base, 0);
+    return netProbe(false).then(function (p) {
+      return p ? attempt(p.base, 0) : OFFLINE;
+    });
+  }
+
+  // GET 挂载点原始资源（应用仓库 .tzyp 下载等），带一次故障转移，成功返回 Blob
+  function netGetRaw(rel) {
+    function attempt(base, tries) {
+      return fetch(base + rel, { method: "GET" })
+        .then(function (r) {
+          if (r.status === 200) return r.blob().then(function (b) { return { ok: true, blob: b }; });
+          return r.json()["catch"](function () { return null; }).then(function (j) {
+            return j || { ok: false, error: "HTTP " + r.status };
+          });
+        })
+        .catch(function () { return null; })
+        .then(function (res) {
+          if (res) return res;
+          if (tries < 1) {
+            return netProbe(true).then(function (p) {
+              return p ? attempt(p.base, tries + 1)
+                      : { ok: false, offline: true, error: "电脑服务不可用（离线模式）" };
+            });
+          }
+          return { ok: false, offline: true, error: "电脑服务不可用（离线模式）" };
+        });
+    }
+    if (NET.base) return attempt(NET.base, 0);
+    return netProbe(false).then(function (p) {
+      return p ? attempt(p.base, 0)
+              : { ok: false, offline: true, error: "电脑服务不可用（离线模式）" };
+    });
+  }
+
+  function tabletBackup(onProgress) {
+    function prog(phase, idx, total, name) {
+      if (typeof onProgress === "function") {
+        try { onProgress({ phase: phase, index: idx, total: total, name: name || "" }); } catch (e) { }
+      }
+    }
+    var files = [];
+    function walk(dir) {
+      return vfs.list(dir).then(function (r) {
+        if (!r.ok) throw new Error(r.error || "列举离线空间失败");
+        var chain = Promise.resolve();
+        (r.entries || []).forEach(function (en) {
+          var p = (dir === "" ? "" : dir) + "/" + en.name;
+          if (en.dir) {
+            chain = chain.then(function () { return walk(p); });
+          } else {
+            files.push({ path: p, name: en.name, size: en.size || 0 });
+          }
+        });
+        return chain;
+      });
+    }
+    return vfs.ready().then(function () { return walk(""); })
+      .then(function () {
+        // localStorage 快照（设置/文档/连接配置等，便于完整还原）
+        var snap = {};
+        try {
+          for (var i = 0; i < localStorage.length; i++) {
+            var k = localStorage.key(i);
+            if (k && k.indexOf("nova2.") === 0) snap[k] = localStorage.getItem(k);
+          }
+        } catch (e) { }
+        files.push({
+          path: "/.tzy-localstorage.json", name: ".tzy-localstorage.json",
+          size: 0, _local: true, _json: snap
+        });
+        prog("begin", 0, files.length);
+        nvLog("info", "backup", "全量备份开始，共 " + files.length + " 个文件");
+        return netCall("sys/vfs-begin", { device: "tablet", files: files });
+      })
+      .then(function (r0) {
+        if (!r0 || !r0.ok) throw new Error((r0 && r0.error) || "电脑服务不可用，无法备份");
+        var sid = r0.sid;
+        var i = 0;
+        function next() {
+          if (i >= files.length) {
+            prog("commit", files.length, files.length);
+            return netCall("sys/vfs-commit", { sid: sid });
+          }
+          var f = files[i++];
+          prog("push", i, files.length, f.name);
+          var getBlob;
+          if (f._local) {
+            getBlob = Promise.resolve(
+              new Blob([JSON.stringify(f._json)], { type: "application/json" }));
+          } else {
+            getBlob = vfs.get(f.path).then(function (g) {
+              if (!g.ok) throw new Error(g.error || "读取失败");
+              if (g.text !== undefined && g.text !== null) {
+                return new Blob([g.text], { type: (g.mime || "text/plain") + ";charset=utf-8" });
+              }
+              return b64ToBlob(g.data, g.mime || "application/octet-stream");
+            });
+          }
+          return getBlob.then(function (blob) {
+            var rel = "sys/vfs-push?sid=" + encodeURIComponent(sid) +
+                      "&p=" + encodeURIComponent(f.path);
+            return netPostRaw(rel, blob).then(function (rp) {
+              if (!rp || !rp.ok) throw new Error((rp && rp.error) || ("推送失败：" + f.name));
+              return next();   // 必须 return，否则顶层 Promise 会提前 resolve
+            });
+          });
+        }
+        return next();
+      });
+  }
+
+  /* ---------------- 音乐歌单单独备份到电脑 ----------------
+   * 推送 /音乐歌单.json（localStorage nova2.music.playlists 原文，含全部歌单与收藏元数据）；
+   * withAudio=true 时附加离线空间 /音乐 目录下已下载的音频文件。
+   * 走与平板全量备份相同的 sys/vfs-begin|push|commit，manifest 带 scope:"music"，
+   * 电脑端会话目录/zip 名带 music- 前缀，便于在 backups/tablet/ 里区分。 */
+  var MUSIC_PL_KEY = "nova2.music.playlists";
+  function musicBackup(withAudio, onProgress) {
+    function prog(phase, idx, total, name) {
+      if (typeof onProgress === "function") {
+        try { onProgress({ phase: phase, index: idx, total: total, name: name || "" }); } catch (e) { }
+      }
+    }
+    var files = [{
+      path: "/音乐歌单.json", name: "音乐歌单.json", size: 0,
+      _local: true, _text: ""
+    }];
+    try { files[0]._text = localStorage.getItem(MUSIC_PL_KEY) || ""; } catch (e) { }
+    var collect = Promise.resolve();
+    if (withAudio) {
+      // 下载的音频平铺在 /音乐 下，列一层即可；目录不存在视为没有已下载歌曲
+      collect = vfs.list("/音乐").then(function (r) {
+        if (!r.ok) return;
+        (r.entries || []).forEach(function (en) {
+          if (en.dir) return;
+          files.push({ path: "/音乐/" + en.name, name: en.name, size: en.size || 0 });
+        });
+      });
+    }
+    return vfs.ready().then(function () { return collect; }).then(function () {
+      prog("begin", 0, files.length);
+      nvLog("info", "musicbk", "音乐歌单备份开始（含音频=" + (withAudio ? 1 : 0) +
+        "），共 " + files.length + " 个文件");
+      return netCall("sys/vfs-begin", { device: "tablet", scope: "music", files: files });
+    }).then(function (r0) {
+      if (!r0 || !r0.ok) throw new Error((r0 && r0.error) || "电脑服务不可用，无法备份");
+      var sid = r0.sid;
+      var i = 0;
+      function next() {
+        if (i >= files.length) {
+          prog("commit", files.length, files.length);
+          return netCall("sys/vfs-commit", { sid: sid });
+        }
+        var f = files[i++];
+        prog("push", i, files.length, f.name);
+        var getBlob;
+        if (f._local) {
+          getBlob = Promise.resolve(
+            new Blob([f._text], { type: "application/json;charset=utf-8" }));
+        } else {
+          getBlob = vfs.get(f.path).then(function (g) {
+            if (!g.ok) throw new Error(g.error || "读取失败");
+            if (g.text !== undefined && g.text !== null) {
+              return new Blob([g.text], { type: (g.mime || "text/plain") + ";charset=utf-8" });
+            }
+            return b64ToBlob(g.data, g.mime || "application/octet-stream");
+          });
+        }
+        return getBlob.then(function (blob) {
+          var rel = "sys/vfs-push?sid=" + encodeURIComponent(sid) +
+                    "&p=" + encodeURIComponent(f.path);
+          return netPostRaw(rel, blob).then(function (rp) {
+            if (!rp || !rp.ok) throw new Error((rp && rp.error) || ("推送失败：" + f.name));
+            return next();
+          });
+        });
+      }
+      return next();
+    });
+  }
 
   /* ---------------- 离线文件系统（IndexedDB VFS，内容以 Blob 存储） ----------------
    * IDB 库 nova2：store meta 单条 {dirs, files:{path:{name,mime,size,mtime,kind}}}
@@ -378,6 +826,10 @@
   }
   function quotaError(err) {
     var name = err && (err.name || (err.message || ""));
+    try {
+      nvLog(/quota/i.test(name) ? "warn" : "error", "vfs",
+            "存储异常：" + name + " " + (err && err.message ? err.message : ""));
+    } catch (_) { }
     if (/quota/i.test(name)) return { ok: false, error: "离线空间已满（浏览器配额不足）" };
     return { ok: false, error: "存储读写失败：" + (err && err.message ? err.message : name || "未知错误") };
   }
@@ -826,24 +1278,329 @@
   var activeId = null;    // 当前聚焦的运行窗口
 
   function registerApp(def) {
-    if (!def || !def.id || apps[def.id]) return;
+    if (!def || !def.id) return;
+    // 仅加载 .tzyp 用户应用期间注入的注册标记为用户应用，其余视为系统内置
+    if (loadingPkgId) def.user = true;
+    if (apps[def.id]) {
+      // 系统内置应用不允许被包覆盖；用户应用更新时整体替换定义
+      if (apps[def.id].def.builtin || !def.user) return;
+      var old = apps[def.id];
+      if (old.win) { try { old.win.close(); } catch (e) { } }
+      if (old.root && old.root.parentNode) {
+        try { old.root.parentNode.removeChild(old.root); } catch (e) { }
+      }
+      apps[def.id] = { def: def, root: null, inited: false, win: null };
+      if (desktopReady) renderDesktop();
+      return;
+    }
+    if (!def.user) def.builtin = true;
     apps[def.id] = { def: def, root: null, inited: false, win: null };
     appOrder.push(def.id);
     if (desktopReady) renderDesktop();
   }
 
-  // 应用清单（设置页展示用）
+  // 应用清单（设置页/应用商店展示用）
   function appList() {
     return appOrder.map(function (id) {
       var d = apps[id].def;
       return {
         id: d.id, name: d.name, icon: d.icon || "·",
+        iconData: d.iconData || "",
         tone: d.tone || "tone-ink",
         version: d.version || "1.0.0",
-        desktop: d.desktop !== false
+        desktop: d.desktop !== false,
+        builtin: !d.user,
+        desc: d.desc || "", author: d.author || ""
       };
     });
   }
+
+  /* ============================================================
+   * Tzy 应用包标准 .tzyp（zip 容器，应用与系统隔离、可独立安装/更新/卸载）
+   *   app.json   清单（必需）：
+   *     {id,name,version,main,icon,tone,maximize,desktop,desc,author}
+   *     id 仅小写字母数字 _-；main 默认 main.js；icon 可写 emoji 或包内图片文件名
+   *   <main>     入口脚本：加载后自行调用 OS.registerApp({...})
+   *   其他文件   应用资源，运行时 OS.pkg.assetUrl(id, rel) 取 blob 网址
+   * 安装位置：离线空间 /apps/<id>/；注册表：localStorage nova2.apps
+   * Loshop & Cpt
+   * ============================================================ */
+  var APPS_KEY = "nova2.apps";
+  var APPS_ROOT = "/apps";
+  var APP_TOTAL_MAX = 50 * 1024 * 1024;   // 单包解压后总大小上限
+  var APP_ICON_MAX = 64 * 1024;           // 图标 dataURL 入注册表的上限
+  var loadingPkgId = null;                // 正在注入入口脚本的包 id（registerApp 据此标记）
+  var pkgUrlCache = {};                   // id/rel -> 已生成的 blob 网址
+
+  function appsRegGet() {
+    var v = Store.get(APPS_KEY, []);
+    return Array.isArray(v) ? v : [];
+  }
+  function appsRegSet(list) { Store.set(APPS_KEY, list); }
+  function validAppId(id) {
+    return /^[a-z0-9][a-z0-9_-]{0,31}$/.test(String(id || ""));
+  }
+  function validPkgRel(rel) {
+    if (!rel || rel.charAt(0) === "/" || rel.charAt(0) === "\\") return false;
+    if (rel.indexOf("..") >= 0 || rel.indexOf(":") >= 0 || rel.charAt(0) === "~") return false;
+    return true;
+  }
+  // 简易版本号比较：1.2.10 > 1.2.9；返回 1/0/-1
+  function cmpVer(a, b) {
+    function parts(x) {
+      return String(x || "0").split(".").map(function (n) {
+        var v = parseInt(n, 10); return isNaN(v) ? 0 : v;
+      });
+    }
+    var pa = parts(a), pb = parts(b), n = Math.max(pa.length, pb.length);
+    for (var i = 0; i < n; i++) {
+      var x = pa[i] || 0, y = pb[i] || 0;
+      if (x !== y) return x > y ? 1 : -1;
+    }
+    return 0;
+  }
+
+  function b64ToText(b64) {
+    var bin = atob(String(b64 || ""));
+    try {
+      return decodeURIComponent(escape(bin));   // utf-8
+    } catch (e) { return bin; }
+  }
+
+  // 注入一个已安装应用的入口脚本（Blob 网址，全局作用域）
+  function loadInstalledApp(meta) {
+    var mainPath = APPS_ROOT + "/" + meta.id + "/" + (meta.main || "main.js");
+    return vfs.get(mainPath).then(function (g) {
+      if (!g || !g.ok) throw new Error((g && g.error) || "入口缺失");
+      var code = (g.text !== undefined && g.text !== null) ? g.text : b64ToText(g.data);
+      var url = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
+      loadingPkgId = meta.id;
+      return new Promise(function (resolve, reject) {
+        var s = document.createElement("script");
+        s.onload = function () {
+          URL.revokeObjectURL(url);
+          loadingPkgId = null;
+          resolve(meta);
+        };
+        s.onerror = function () {
+          URL.revokeObjectURL(url);
+          loadingPkgId = null;
+          reject(new Error("入口脚本执行失败：" + (meta.main || "main.js")));
+        };
+        s.src = url;
+        document.head.appendChild(s);
+      });
+    });
+  }
+
+  // 开机后异步加载全部已安装应用，单个失败不影响其他应用与系统
+  function loadInstalledApps() {
+    var list = appsRegGet();
+    nvLog("info", "pkg", "加载已注册应用 " + list.length + " 个：" +
+      list.map(function (m) { return m.id + "@" + m.version; }).join(", "));
+    var chain = Promise.resolve();
+    list.forEach(function (meta) {
+      chain = chain.then(function () {
+        if (!meta || !meta.id || apps[meta.id]) return null;
+        return loadInstalledApp(meta)["catch"](function (e) {
+          nvErr("pkg", e, "已安装应用 " + meta.id + " 加载失败，已移出注册表");
+          appsRegSet(appsRegGet().filter(function (m) { return m.id !== meta.id; }));
+        });
+      });
+    });
+    return chain;
+  }
+
+  // 预装：仓库里标记 preinstall 的应用包，开机时若从未装过则静默安装。
+  // 装成功即记入 nova2.preinstall.done —— 用户此后卸载不会每次开机又被装回来。
+  function preinstallApps() {
+    return pkgApi.catalog().then(function (list) {
+      var done = Store.get("nova2.preinstall.done", []);
+      if (!Array.isArray(done)) done = [];
+      var todo = (list || []).filter(function (a) {
+        return a && a.preinstall && a.file && done.indexOf(a.id) < 0 && !apps[a.id] &&
+          !appsRegGet().some(function (m) { return m.id === a.id; });
+      });
+      if (todo.length) nvLog("info", "pkg", "待预装应用：" + todo.map(function (a) {
+        return a.id + "@" + a.version;
+      }).join(", "));
+      var chain = Promise.resolve();
+      todo.forEach(function (a) {
+        chain = chain.then(function () {
+          return pkgApi.download(a.file).then(function (r) {
+            // download 返回 netGetRaw 包装对象 {ok, blob}，需解包后交给 install
+            if (!r || !r.ok || !r.blob) throw new Error((r && r.error) || "下载失败");
+            nvLog("debug", "pkg", "预装包已下载 " + a.file + " " +
+              ((r.blob && r.blob.size) || 0) + " 字节");
+            return pkgApi.install(r.blob);
+          }).then(function () {
+            done = Store.get("nova2.preinstall.done", []);
+            if (!Array.isArray(done)) done = [];
+            if (done.indexOf(a.id) < 0) { done.push(a.id); Store.set("nova2.preinstall.done", done); }
+            nvLog("info", "pkg", "预装成功：" + a.id + "@" + a.version);
+            if (desktopReady) renderDesktop();
+          })["catch"](function (e) {
+            nvErr("pkg", e, "预装失败：" + a.id + "（" + a.file + "）");
+          });
+        });
+      });
+      return chain;
+    })["catch"](function (e) {
+      nvErr("pkg", e, "获取应用仓库清单失败，预装跳过");
+    });
+  }
+
+  // 安装/更新：入参 zip Blob（.tzyp），返回注册项 meta
+  function appInstall(blob, onProgress) {
+    function pg(stage, cur, total) {
+      if (stage === "open" || stage === "register" || stage === "done")
+        nvLog("debug", "pkg", "安装阶段 " + stage + " " + (cur || 0) + "/" + (total || 0));
+      if (typeof onProgress === "function") {
+        try { onProgress({ stage: stage, cur: cur || 0, total: total || 0 }); } catch (e) { }
+      }
+    }
+    var zip, meta;
+    pg("open", 0, 1);
+    if (!window.JSZip) return Promise.reject(new Error("安装组件未加载"));
+    return window.JSZip.loadAsync(blob).then(function (z) {
+      zip = z;
+      var mf = zip.file("app.json");
+      if (!mf) throw new Error("缺少清单 app.json");
+      return mf.async("string");
+    }).then(function (txt) {
+      try { meta = JSON.parse(txt); } catch (e) { throw new Error("app.json 不是合法 JSON"); }
+      if (!meta || typeof meta !== "object") throw new Error("清单格式错误");
+      if (!validAppId(meta.id)) throw new Error("id 非法：仅允许小写字母/数字/_-，且 2~32 字符");
+      if (!meta.name) throw new Error("清单缺少 name");
+      meta.main = meta.main || "main.js";
+      if (!validPkgRel(meta.main)) throw new Error("main 路径非法");
+      if (!zip.file(meta.main)) throw new Error("入口文件不存在：" + meta.main);
+      if (apps[meta.id] && apps[meta.id].def.builtin) throw new Error("与系统内置应用 id 冲突");
+      if (meta.icon && !/^[\u0020-\uFFFF]{1,8}$/.test(meta.icon) &&
+          (!validPkgRel(meta.icon) || !zip.file(meta.icon))) {
+        throw new Error("icon 须为 emoji 或包内存在的图片文件名");
+      }
+      var entries = [];
+      var total = 0;
+      zip.forEach(function (rel, zf) {
+        if (zf.dir) return;
+        if (!validPkgRel(rel)) throw new Error("非法包内路径：" + rel);
+        total += (zf._data && zf._data.uncompressedSize) || 0;
+        if (total > APP_TOTAL_MAX) throw new Error("应用包超过 50MB 上限");
+        entries.push({ rel: rel, zf: zf });
+      });
+      if (!entries.length) throw new Error("空包");
+      var base = APPS_ROOT + "/" + meta.id;
+      pg("clear", 0, entries.length);
+      return (apps[meta.id] ? vfs.del(base) : Promise.resolve())
+        ["catch"](function () { return null; })
+        .then(function () { return vfs.mkdir(base)["catch"](function () { return null; }); })
+        .then(function () {
+          var iconData = "";
+          if (meta.icon && zip.file(meta.icon)) {
+            return zip.file(meta.icon).async("base64").then(function (b64) {
+              if (b64.length <= APP_ICON_MAX) iconData = "data:" + mimeOf(meta.icon) + ";base64," + b64;
+            })["catch"](function () { return null; }).then(function () {
+              return { entries: entries, total: total, iconData: iconData };
+            });
+          }
+          return { entries: entries, total: total, iconData: "" };
+        });
+    }).then(function (ctx) {
+      var entries = ctx.entries;
+      var base = APPS_ROOT + "/" + meta.id;
+      var i = 0;
+      function writeOne() {
+        if (i >= entries.length) return null;
+        var en = entries[i++];
+        pg("write", i, entries.length);
+        return en.zf.async("base64").then(function (b64) {
+          return vfs.put(base + "/" + en.rel, {
+            data: b64, mime: mimeOf(en.rel), name: en.rel.split("/").pop()
+          });
+        }).then(writeOne);
+      }
+      return writeOne().then(function () { return ctx; });
+    }).then(function (ctx) {
+      pg("register", 1, 1);
+      var now = Date.now();
+      var ex = appsRegGet().filter(function (m) { return m.id === meta.id; })[0];
+      var regItem = {
+        id: meta.id, name: String(meta.name), version: String(meta.version || "1.0.0"),
+        main: meta.main, icon: meta.icon || "📦", iconData: ctx.iconData || "",
+        tone: meta.tone || "tone-blue",
+        maximize: !!meta.maximize, desktop: meta.desktop !== false,
+        desc: String(meta.desc || ""), author: String(meta.author || ""),
+        size: ctx.total || 0,
+        installedAt: ex ? ex.installedAt : now, updatedAt: now
+      };
+      var list = appsRegGet().filter(function (m) { return m.id !== regItem.id; });
+      list.push(regItem);
+      appsRegSet(list);
+      return loadInstalledApp(regItem).then(function () {
+        pg("done", 1, 1);
+        return regItem;
+      });
+    });
+  }
+
+  function appUninstall(id) {
+    var rec = apps[id];
+    if (!rec || !rec.def.user) return Promise.reject(new Error("系统内置应用不可卸载"));
+    if (rec.win) { try { rec.win.close(); } catch (e) { } }
+    if (rec.root && rec.root.parentNode) {
+      try { rec.root.parentNode.removeChild(rec.root); } catch (e) { }
+    }
+    delete apps[id];
+    appOrder = appOrder.filter(function (x) { return x !== id; });
+    Object.keys(pkgUrlCache).forEach(function (k) {
+      if (k.indexOf(id + "/") === 0) {
+        try { URL.revokeObjectURL(pkgUrlCache[k]); } catch (e) { }
+        delete pkgUrlCache[k];
+      }
+    });
+    appsRegSet(appsRegGet().filter(function (m) { return m.id !== id; }));
+    return vfs.del(APPS_ROOT + "/" + id)["catch"](function () { return null; })
+      .then(function () { if (desktopReady) renderDesktop(); return { ok: true }; });
+  }
+
+  // 应用运行时取包内资源的 blob 网址（应用内 iframe/图片等使用）
+  function appAssetUrl(id, rel) {
+    rel = String(rel || "").replace(/^\/+/, "");
+    var key = id + "/" + rel;
+    if (pkgUrlCache[key]) return Promise.resolve(pkgUrlCache[key]);
+    return vfs.get(APPS_ROOT + "/" + id + "/" + rel).then(function (g) {
+      if (!g || !g.ok) throw new Error((g && g.error) || "资源不存在");
+      var blob = (g.text !== undefined && g.text !== null)
+        ? new Blob([g.text], { type: g.mime || mimeOf(rel) })
+        : b64ToBlob(g.data, g.mime || mimeOf(rel));
+      var u = URL.createObjectURL(blob);
+      pkgUrlCache[key] = u;
+      return u;
+    });
+  }
+
+  // 电脑端应用仓库目录（netCall 走 POST，端点同时接受 GET/POST）
+  function appCatalog() {
+    return netCall("sys/app-catalog", {}).then(function (r) {
+      return (r && r.ok && r.apps) ? r.apps : [];
+    });
+  }
+  function appDownload(file) {
+    return netGetRaw("sys/app-package?f=" + encodeURIComponent(file));
+  }
+
+  var pkgApi = {
+    install: appInstall,
+    uninstall: appUninstall,
+    installed: appsRegGet,
+    catalog: appCatalog,
+    download: appDownload,
+    assetUrl: appAssetUrl,
+    cmpVer: cmpVer,
+    isUser: function (id) { return !!(apps[id] && apps[id].def.user); }
+  };
+
 
   function winSize() {
     var w = window.innerWidth, hh = window.innerHeight;
@@ -866,8 +1623,15 @@
 
   function openApp(id, arg) {
     var rec = apps[id];
-    if (!rec) return;
-    if (rec.win) { focusApp(id); if (rec.def.onArg) rec.def.onArg(rec.root, arg); return; }
+    if (!rec) { nvLog("warn", "app", "openApp 未找到应用：" + id); return; }
+    if (rec.win) {
+      focusApp(id);
+      if (rec.def.onArg) {
+        try { rec.def.onArg(rec.root, arg); }
+        catch (e) { nvErr("app", e, "应用 " + id + " onArg 异常"); }
+      }
+      return;
+    }
 
     // 懒构造：应用根节点常驻隐藏容器，WinBox 以 mount 方式搬入，
     // 关闭时自动搬回原父节点 → 状态（输入内容/滚动位置）完整保留。
@@ -878,7 +1642,9 @@
     }
     if (!rec.inited) {
       rec.inited = true;
-      try { rec.def.open(rec.root, API_FOR_APP); } catch (e) { }
+      nvLog("info", "app", "首次构建应用：" + id);
+      try { rec.def.open(rec.root, API_FOR_APP); }
+      catch (e) { nvErr("app", e, "应用 " + id + " open/build 崩溃"); }
     }
     rec.root.style.display = "";
 
@@ -908,7 +1674,14 @@
     rec.win = wb;
     activeId = id;
     if (rec.def.maximize) { try { wb.maximize(); } catch (e) { } }
-    if (rec.def.onArg) rec.def.onArg(rec.root, arg);
+    if (rec.def.onArg) {
+      try { rec.def.onArg(rec.root, arg); }
+      catch (e) { nvErr("app", e, "应用 " + id + " 首次 onArg 异常"); }
+    }
+    // 每次打开（含关闭后复用根节点重开）都广播 nv-open：
+    // 根节点只 build 一次，像远程浏览器这种在 nv-close 时释放连接的应用，
+    // 需要靠它重新订阅，否则重开后永远是冻结的旧画面。
+    try { rec.root.dispatchEvent(new Event("nv-open")); } catch (e) { }
     renderDock();
   }
 
@@ -1243,6 +2016,20 @@
         online: function () { return NET.online; }
       },
       vfs: vfs,
+      debug: debugApi,
+      // 全系统统一日志：OS.log(tag, 任意内容..., level?) / OS.logerr(tag, err, 上下文)
+      // 调试开关关时仅 console；开启后同时回传电脑 + 写离线空间 /日志/
+      log: function (tag) {
+        var args = Array.prototype.slice.call(arguments, 1);
+        var level = "info";
+        if (args.length && /^(debug|info|warn|error)$/.test(args[args.length - 1]))
+          level = args.pop();
+        dbgEmit(level, String(tag || "app"), args);
+      },
+      logerr: function (tag, err, ctx) { nvErr(String(tag || "app"), err, ctx); },
+      tabletBackup: tabletBackup,
+      musicBackup: musicBackup,
+      pkg: pkgApi,
       ui: ui,
       dlg: dlg,
       toast: toast,
@@ -1270,6 +2057,7 @@
     tickClock();
     setInterval(tickClock, 1000);
     initLock();
+    if (Store.get(DEBUG_KEY, false)) dbgEnable();   // 调试模式：开机即回传日志
 
     var btnLock = document.getElementById("nv-sb-lock");
     if (btnLock) btnLock.addEventListener("click", lockScreen);
@@ -1295,6 +2083,15 @@
     renderDesktop();
     renderDock();
     window.OS.__booted = true;
+    nvLog("info", "boot", "Tzy OS 桌面就绪，内置应用 " + Object.keys(apps).length + " 个");
+
+    // 用户安装的 .tzyp 应用：桌面就绪后异步加载，不拖慢开机
+    setTimeout(function () {
+      try {
+        loadInstalledApps().then(function () { return preinstallApps(); })
+          ["catch"](function (e) { nvErr("boot", e, "开机应用加载链异常"); });
+      } catch (e) { nvErr("boot", e, "触发开机应用加载失败"); }
+    }, 300);
 
     // 后台预热：判定劫持同源 / 热点直连 / 完全离线，供文件应用即时使用
     setTimeout(function () { netProbe(false); }, 800);

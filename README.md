@@ -19,16 +19,18 @@ Loshop & Cpt
 ```
 
 - **热点 DNS 劫持模式（模式 1）**：平板连电脑热点，DNS 劫持 + manifest 注入 + 缓存投毒。访问一次专栏后，即使断开劫持，OS 仍可从浏览器长期缓存唤起。
-- **局域网代理模式（模式 2）**：不控 DNS，平板与电脑同一局域网，浏览器直接开 `http://电脑IP/__nova__/`。
+- **局域网代理模式（模式 2）**：不控热点。**DNS 应答默认开启**——把平板 Wi-Fi 的 DNS 手动设为电脑的局域网 IP，平板照常打开「在线专栏」即可被透明注入（只解析 `hijack_domains` 里列出的平台域名，其余域名照常转发，不影响平板访问其它网站）。`cache_poison`（一年长缓存投毒 / 离线持久化）在模式 2 默认**关闭**，需要时可在管理界面开启。
 - **隐蔽唤起**（均可在管理界面开关）：键盘 `Ctrl+Shift+Y`、屏幕角落连点 5 次、网址暗参 `?_o=1`、搜索框输入关键词。
 
 ## 2. 目录结构
 
 | 路径 | 说明 |
 | --- | --- |
-| `novaosd.py` | **总程序入口**（5 行，转发到 `novacore.service.main`） |
+| `novaosd.py` | **总程序入口**（转发到 `novacore.service.main`，兼容内嵌运行时） |
 | `server.py` | 旧入口兼容 shim，效果等同 `novaosd.py` |
 | `novacore/` | 服务端按功能拆分的 Python 包（见下表） |
+| `novelsrc/` | 📚 小说下载后端：19 个中文书源实现 + HTTP 门面（纯 Python） |
+| `novel_server.py` | 📚 小说下载后端入口（Flask，按需拉起为子进程） |
 | `tools/nova_setup.py` | 安装器：依赖安装、模式切换、环境预检 |
 | `tools/nova_update.py` | 更新器：刷新页面静态资源缓存版本号 |
 | `tools/nova_backup.py` | 备份器：打包 novaos2 + 配置 + 入口脚本为 zip |
@@ -37,14 +39,18 @@ Loshop & Cpt
 | `loader.js` / `boot-stub.js` / `bridge.js` | 注入引导链：stub 注入 manifest → loader 握手 → bridge 桥接 |
 | `config.json` | 全部运行配置（管理界面可改，一般不用手编） |
 | `install.bat` / `start.bat` / `stop-hotspot.bat` | 安装 / 启动（自动提权、开热点、防火墙）/ 关热点 |
-| `build_all.bat` | 一键 Nuitka 编译 4 个单文件 exe（强混淆） |
+| `runtime/` | 内嵌便携 Python 3.8 运行时（含全部依赖，`build_runtime.ps1` 生成，不入库） |
+| `build_runtime.ps1` | 构建内嵌便携 Python 运行时（Win7/10/11 通用） |
+| `build_all.bat` | 一键打包：组装 `dist\TzyOS\` + 自动压缩为 `dist\TzyOS.zip` |
+| `apps_repo/` | 预装应用仓库（`*.tzyp` 应用包） |
 | `archive/novaos1/` | 旧版 NovaOS 1 整包归档，不再参与运行 |
+| `archive/lncrawl/` | 已废弃的 lncrawl / lnoveldl 代码与构建脚本（归档） |
 
 ### novacore 模块职责
 
 | 模块 | 职责 |
 | --- | --- |
-| `paths.py` | 部署路径常量（兼容 Nuitka onefile 的临时解压目录）、访问日志 |
+| `paths.py` | 部署路径常量、访问日志 |
 | `configutil.py` | 配置加载/保存/校验、`novaos_dir`/`fs_root`/挂载前缀 |
 | `netutil.py` | 本机/热点/应答 IP、外部域名解析（防 DNS 回环、带缓存） |
 | `dns_service.py` | 迷你 DNS 服务（UDP 53，劫持域名 + 上游转发） |
@@ -53,37 +59,50 @@ Loshop & Cpt
 | `cdp_browser.py` | CDP headless Chrome 单例：启动、输入回注、JPEG 帧 SSE 推流 |
 | `toolkit.py` | 公共工具：`?v=` 版本号刷新、备份 zip 打包 |
 | `proxy_app.py` | HTTP 透明代理 + 注入 + 挂载点（含 `/sys/update`、`/sys/backup`） |
+| `novel_dl.py` | 📚 小说下载后端：`novel_server.py` 子进程按需拉起 + 流式反代 |
 | `admin_app.py` | 本机管理界面 API |
 | `service.py` | DNS / HTTP / ADMIN 三线程编排总控 |
 
-## 3. 快速开始（Python 源码方式）
+## 3. 快速开始
 
-要求：Windows 10/11 + Python 3.9+（开发环境 3.13）+ Chrome 或 Edge（远程浏览器用，可选）。
+**目标机无需安装任何东西**：解释器与依赖都在随包分发的 `runtime\`（内嵌便携 Python 3.8）。
 
-1. 右键管理员运行 `install.bat`（或命令行 `python tools\nova_setup.py`），按提示选模式，会自动 `pip install -r requirements.txt` 并做环境预检。
-   - `python tools\nova_setup.py --check`：只做预检（管理员权限、依赖、Chrome、目录）。
-   - `python tools\nova_setup.py --mode 1|2`：免交互直接切模式。
-2. 模式 1：运行 `start.bat`（自动提权、开防火墙、开热点、起服务）；模式 2：`start.bat /nohotspot`，或安装器选 2 后直接启动。
-3. 平板连热点后照常打开专栏页面，用设定的暗号唤起；模式 2 直接浏览器开启动时打印的 `http://电脑IP/__nova__/`。
+要求：Windows 7 SP1 / 8.1 / 10 / 11 + Chrome 或 Edge（远程浏览器用，可选）。
+Win7 SP1 另需 UCRT 更新 **KB2999226**（多数已随系统更新打过，详见 [BUILD.md](BUILD.md)）。
+
+1. 右键管理员运行 `install.bat`，按提示选模式（1=热点 DNS 劫持 / 2=局域网代理），会自动做环境预检并启动。
+   - `install.bat --check`：只做预检（管理员权限、解释器、依赖、Chrome、目录、Win7 UCRT）。
+   - `install.bat --mode 1|2`：免交互直接切模式。
+2. 之后每次运行 `start.bat`（自动提权、开防火墙、起服务）：模式 1 会自动开热点；模式 2 用 `start.bat /nohotspot`。
+3. 平板接入：
+   - 模式 1：连电脑热点，照常打开「在线专栏」，用暗号唤起。
+   - 模式 2：把平板当前 Wi-Fi 的 **DNS 手动设为电脑的局域网 IP**（启动时会打印，如 `192.168.1.5`），再照常打开「在线专栏」——无需输入任何自定义网址。若关掉 DNS 应答，也可直接访问 `http://电脑IP/__nova__/`。
 4. 管理：电脑浏览器开 <http://127.0.0.1:8899/>。
 
 停止服务后用 `stop-hotspot.bat` 关闭电脑热点。
 
-## 4. 编译为单文件 exe（强混淆）
+> 开发机源码调试：先 `python tools\nova_setup.py --deps` 装依赖，再 `python novaosd.py`。
+> 打包分发见 [BUILD.md](BUILD.md)：`build_runtime.ps1` 生成运行时，`build_all.bat` 一键出 `dist\TzyOS.zip`。
 
-运行 `build_all.bat`（首次会自动安装 Nuitka 并下载 MinGW64 工具链，需联网、耗时较长）。
-产物在 `dist/`：
+## 4. 打包分发（源码 + 内嵌运行时，全平台通用）
 
-| exe | 对应 | 作用 |
-| --- | --- | --- |
-| `novaosd.exe` | `novaosd.py` | 主服务（DNS+HTTP+CDP+管理） |
-| `nova-setup.exe` | `tools/nova_setup.py` | 安装/预检/模式切换 |
-| `nova-update.exe` | `tools/nova_update.py` | 刷新缓存版本号 |
-| `nova-backup.exe` | `tools/nova_backup.py` | 生成备份 zip（可带输出目录参数） |
+不编译、不混淆，**Win7 / Win10 / Win11 共用一个包**：
 
-Python 代码经 Nuitka 编译为机器码，目标机无 `.py` 源码。`novaos2/`、`admin/`、`config.json`、注入脚本等**数据文件不嵌入 exe**，便于不重新编译就热更页面。
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -File build_runtime.ps1   :: 首次生成 runtime\（约 40MB）
+build_all.bat                                                          :: 组装 + 自动压缩
+```
 
-**部署**：把 4 个 exe 放到与 `config.json`、`novaos2/` 同级的目录（exe 旁找不到配置时自动退回当前工作目录）；`install.bat` / `start.bat` 检测到 `dist\*.exe` 会优先用 exe，否则回退 Python 源码。
+产物：
+
+| 产物 | 说明 |
+| --- | --- |
+| `dist\TzyOS\` | 部署目录（源码 + `novaos2/` + `runtime/`，拷到目标机即可运行） |
+| `dist\TzyOS.zip` | 压缩包（Optimal，约 15MB），含包内冒烟自检通过的完整运行环境 |
+
+`build_all.bat` 在压缩前会用**包内**运行时导入 `novacore.service` / `novelsrc.facade` 与全部
+第三方库做冒烟自检，不通过则中止，确保出包可用。`install.bat` / `start.bat` 会优先使用
+`runtime\python\python.exe`，找不到时才回退系统 `python`。
 
 ## 5. 配置说明（config.json / 管理界面）
 
@@ -105,15 +124,14 @@ Python 代码经 Nuitka 编译为机器码，目标机无 `.py` 源码。`novaos
 
 ## 6. 更新与备份（三种入口）
 
-1. **平板上（强混淆页面内）**：设置应用 →「系统维护」卡片：
+1. **平板上**：设置应用 →「系统维护」卡片：
    - **立即更新**：POST 挂载点同源接口 `sys/update`，刷新 HTML 内 `?v=` 版本号，平板下次打开自动取新文件，无需清缓存。
    - **下载备份**：GET `sys/backup`，把 `novaos2/`、`config.json`、`loader/bridge`、入口脚本打包为带时间戳的 zip 下载到平板本机。
    （管理端口只绑 127.0.0.1，平板访问不到，所以这两个功能特意挂在同源挂载点。）
 2. **电脑管理界面**：更新/备份按钮，走 `127.0.0.1:8899` 的 `/api/update`、`/api/backup`。
-3. **命令行**：
-   - `python tools\nova_update.py`（`--dry-run` 只看不动）
-   - `python tools\nova_backup.py [输出目录]`
-   - 编译后对应 `nova-update.exe` / `nova-backup.exe`。
+3. **命令行**：用包内解释器（或系统 Python）执行
+   - `runtime\python\python.exe tools\nova_update.py`（`--dry-run` 只看不动）
+   - `runtime\python\python.exe tools\nova_backup.py [输出目录]`
 
 ## 7. 缓存策略（为什么不用清缓存）
 
@@ -128,12 +146,14 @@ Python 代码经 Nuitka 编译为机器码，目标机无 `.py` 源码。`novaos
 ## 9. 兼容性
 
 - 前端 ES6，兼容华为平板内置 Chrome 99 WebView：不使用 2022+ 语法，不用 `:has()` / `color-mix()`。
+- 后端纯 Python 3.8，Win7 SP1 / 8.1 / 10 / 11 通用（Win7 需 UCRT 更新 KB2999226）。
 - bat 脚本纯 ASCII、无 BOM、不依赖 `chcp`。
 
 ## 10. 故障排查
 
-- 服务起不来：先 `nova-setup --check`；53/80 端口必须管理员，热点模式检查 Wi-Fi 网卡与互联网。
+- 服务起不来：先 `install.bat --check`；53/80 端口必须管理员，热点模式检查 Wi-Fi 网卡与互联网。
 - 平板打不开 OS：看电脑 `logs/access.log`（含平板回传的探针打点）；确认连对热点、域名在劫持列表、缓存投毒开关与专栏 manifest 路径。
 - 远程浏览器黑屏：确认电脑装有 Chrome/Edge；程序会自动清理残留的 `SingletonLock` 并轮询等待 CDP 端口就绪。
 - 断劫持后失联：确认曾成功投毒（`cache_poison` 开且访问过一次），或改用模式 2 直连 `http://电脑IP/__nova__/`。
-- 重新编译失败：直接运行 `build_all.bat` 看 Nuitka 输出；不编译也可以，`start.bat` 会自动回退到 Python 源码运行。
+- Win7 报缺 `api-ms-win-crt-*.dll`：装 UCRT 更新 KB2999226。
+- 重新打包失败：直接运行 `build_all.bat` 看输出；`runtime\` 缺失时它会先调 `build_runtime.ps1` 重建。

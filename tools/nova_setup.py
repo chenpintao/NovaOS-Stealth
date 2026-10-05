@@ -44,7 +44,32 @@ def find_chrome():
     return None
 
 
+def runtime_python():
+    """内嵌便携运行时解释器（随包分发，目标机免装 Python）。"""
+    p = os.path.join(ROOT, "runtime", "python", "python.exe")
+    return p if os.path.isfile(p) else None
+
+
+def is_win7():
+    try:
+        return sys.platform == "win32" and sys.getwindowsversion()[:2] == (6, 1)
+    except Exception:
+        return False
+
+
+def ucrt_ok():
+    """Win7 上 Python 3.8 依赖 UCRT（KB2999226 提供）。"""
+    try:
+        ctypes.WinDLL("api-ms-win-crt-runtime-l1-1-0.dll")
+        return True
+    except Exception:
+        return False
+
+
 def install_deps():
+    if runtime_python():
+        print("[*] Embedded runtime found - dependencies are bundled, skipping pip.")
+        return True
     print("[*] Installing python dependencies ...")
     rc = subprocess.call([sys.executable, "-m", "pip", "install", "-r", REQUIREMENTS])
     if rc != 0:
@@ -55,22 +80,31 @@ def install_deps():
 
 def check_modules():
     missing = []
-    for mod in ("flask", "requests"):
+    for mod in ("flask", "requests", "websocket"):
         try:
             __import__(mod)
         except ImportError:
             missing.append(mod)
     optional = []
-    try:
-        import websocket  # noqa: F401
-    except ImportError:
-        optional.append("websocket-client (needed by CDP remote browser)")
+    for mod in ("bs4", "lxml", "Crypto", "cryptography", "ebooklib", "charset_normalizer"):
+        try:
+            __import__(mod)
+        except ImportError:
+            optional.append(mod)
+    if optional:
+        print("[i] Missing (novel backend needs these) :", ", ".join(optional))
     return missing, optional
 
 
 def preflight():
     ok = True
     print("== Tzy OS preflight ==")
+    print("[*] Python interpreter      :", sys.executable)
+    rt = runtime_python()
+    print("[*] Embedded runtime        :", rt or "NOT FOUND (using system Python)")
+    if is_win7():
+        print("[i] Windows 7 detected      : requires UCRT update KB2999226 (see BUILD.md)")
+        print("[i] UCRT present            :", "YES" if ucrt_ok() else "NO - install KB2999226")
     print("[*] Running as administrator :", "YES" if is_admin() else "NO (needed for port 53/80)")
     if not is_admin():
         ok = False
@@ -79,9 +113,7 @@ def preflight():
         print("[!] Missing core modules   :", ", ".join(missing))
         ok = False
     else:
-        print("[*] Core python modules     : OK (flask, requests)")
-    for m in optional:
-        print("[i] Optional missing        :", m)
+        print("[*] Core python modules     : OK (flask, requests, websocket)")
     chrome = find_chrome()
     print("[*] Chrome/Edge for CDP      :", chrome or "NOT FOUND (remote browser disabled)")
     print("[*] config.json              :", "OK" if os.path.isfile(CONFIG_PATH) else "MISSING")
@@ -94,11 +126,17 @@ def set_mode(mode):
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         cfg = json.load(f)
     if mode == 1:
+        # 模式 1：热点 DNS 劫持（缓存投毒默认开，断劫持后仍可离线唤起）
         cfg["lan_mode"] = False
         cfg["dns_enable"] = True
+        cfg["cache_poison"] = True
     else:
+        # 模式 2：局域网模式。DNS 应答默认开启（平板 Wi-Fi 的 DNS 手动指向本机，
+        # 只解析 hijack_domains 里的平台域名，其余域名照常转发），
+        # 但缓存投毒默认关闭，避免污染平板对其它站点的缓存；需要时可在管理界面开。
         cfg["lan_mode"] = True
-        cfg["dns_enable"] = False
+        cfg["dns_enable"] = True
+        cfg["cache_poison"] = False
     tmp = CONFIG_PATH + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
@@ -126,8 +164,9 @@ def main():
         print("================================")
         print(" [1] Hotspot DNS Hijack Mode")
         print("     (tablet connects to PC hotspot; DNS hijack + cache poison)")
-        print(" [2] LAN Proxy Mode")
-        print("     (same LAN; open http://PC_IP/__nova__/ directly)")
+        print(" [2] LAN Mode")
+        print("     (no hotspot; set tablet Wi-Fi DNS to this PC's LAN IP,")
+        print("      then open the column page as usual - no custom URL needed)")
         sel = input("Select mode [1/2]: ").strip()
         if sel not in ("1", "2"):
             print("Invalid selection.")
