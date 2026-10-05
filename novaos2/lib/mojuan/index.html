@@ -1726,24 +1726,68 @@ function scheduleHideControls() {
   }, 3000);
 }
 
+/* ========== Tzy OS 文件管理器桥 ==========
+ * 在 Tzy OS 内运行时（同源 iframe），导入走系统文件管理器：OS.pickFile()
+ * 打开「文件」应用的选择模式，返回 {source,path,name}，再按来源读取字节流，
+ * 包装成 File 交给 importFile。独立打开（没有 OS 宿主）时退回原生选择框。
+ * Loshop & Cpt */
+function osHost() {
+  try {
+    const w = window.parent;
+    if (w && w !== window && w.OS && typeof w.OS.pickFile === 'function') return w.OS;
+  } catch (e) { /* 跨源则视为无宿主 */ }
+  return null;
+}
+
+async function readPicked(os, sel) {
+  if (sel.source === 'vfs') return os.vfs.get(sel.path);
+  if (sel.source === 'fs') return os.api.fs('get', { path: sel.path });
+  if (sel.source === 'ftp') return os.api.ftp(Object.assign({}, os.store.get('nova2.ftp', {}), { op: 'get', path: sel.path }));
+  return os.api.smb(Object.assign({}, os.store.get('nova2.smb', {}), { op: 'get', path: sel.path }));
+}
+
+async function pickFromFileManager(os) {
+  // 默认落在「离线空间」（平板本机、离线可用，小说多存于此）；可切到电脑/FTP/SMB
+  const sel = await os.pickFile({ mode: 'open', source: 'vfs' });
+  if (!sel) return null;                        // 用户取消
+  const r = await readPicked(os, sel);
+  if (!r || r.ok === false) {
+    throw new Error((r && (r.offline ? '服务不可达（离线）' : r.error)) || '读取失败');
+  }
+  const blob = r.text
+    ? new Blob([r.content], { type: 'text/plain;charset=utf-8' })
+    : os.b64ToBlob(r.data, r.mime || os.mimeOf(sel.name));
+  return new File([blob], sel.name, { type: blob.type });
+}
+
+async function importFiles(files) {
+  for (const file of files) {
+    const existing = State.books.find(b => b.fileName === file.name && b.fileSize === file.size);
+    if (existing) { showToast(`《${file.name}》已存在`); continue; }
+    showToast(`正在导入 ${file.name}...`);
+    try {
+      await importFile(file);
+      showToast(`已导入 ${file.name}`);
+    } catch(err) { showToast(`导入失败: ${err.message}`); }
+  }
+  await loadBooks();
+  renderBookshelf();
+}
+
 /* ========== Event Bindings ========== */
 function initShelfEvents() {
-  // Import
-  document.getElementById('btn-import').addEventListener('click', () => document.getElementById('file-input').click());
+  // Import：Tzy OS 内走系统文件管理器，否则退回原生选择框
+  document.getElementById('btn-import').addEventListener('click', async () => {
+    const os = osHost();
+    if (!os) { document.getElementById('file-input').click(); return; }
+    try {
+      const file = await pickFromFileManager(os);
+      if (file) await importFiles([file]);
+    } catch (err) { showToast(`导入失败: ${err.message || err}`); }
+  });
   document.getElementById('file-input').addEventListener('change', async (e) => {
-    const files = e.target.files;
-    for (const file of files) {
-      const existing = State.books.find(b => b.fileName === file.name && b.fileSize === file.size);
-      if (existing) { showToast(`《${file.name}》已存在`); continue; }
-      showToast(`正在导入 ${file.name}...`);
-      try {
-        await importFile(file);
-        showToast(`已导入 ${file.name}`);
-      } catch(err) { showToast(`导入失败: ${err.message}`); }
-    }
+    await importFiles(e.target.files);
     e.target.value = '';
-    await loadBooks();
-    renderBookshelf();
   });
   // Shelf search & sort
   document.getElementById('shelf-search').addEventListener('input', debounce(() => renderBookshelf(), 200));

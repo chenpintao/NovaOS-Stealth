@@ -325,6 +325,57 @@
     });
   }
 
+  /* ---------------- 应用动态基址助手 ----------------
+   * 应用若用裸相对路径（如 "novel/api/meta"），其基准是 nova.html 的挂载点；
+   * 一旦域名劫持失效、OS 改用直连 IP，裸相对路径就会打到真实服务器（404/405）。
+   * 以下助手统一把相对挂载路径拼到「当前电脑基址」上，并在命中非本机服务时
+   * 自动重探新地址后重试 —— 换局域网/换设备后即可自动跟随电脑新 IP。 */
+  function normRel(rel) {
+    return String(rel == null ? "" : rel).replace(/^\/+/, "");
+  }
+  // 同步拼接：拿当前已知基址（探测未完成时可能为同源相对路径）
+  function netUrl(rel) {
+    return (NET.base || "") + normRel(rel);
+  }
+  // 异步拼接：确保探测完成后再给地址（用于 iframe.src 等必须在挂载后写死的场景）
+  function netResolve(rel) {
+    var r = normRel(rel);
+    if (NET.base) return Promise.resolve(NET.base + r);
+    return netProbe(false).then(function (p) {
+      return (p ? p.base : (NET.base || "")) + r;
+    });
+  }
+  // 带自动重探重试的动态基址 fetch：返回原生 Response，可直接 .json()/.text()/.blob()
+  function netFetch(rel, init) {
+    var r = normRel(rel);
+    function attempt(base, tries) {
+      return fetch(base + r, init).then(function (resp) {
+        if (resp && resp.ok) return resp;
+        // 判定「打到的不是本机服务」：错误响应不是 JSON（本机端点一律回 JSON，
+        // 劫持失效时会落到真实服务器的 HTML/网关页）。是 JSON 就当成正常业务错误返回。
+        var ct = (resp && resp.headers && resp.headers.get("content-type")) || "";
+        var foreign = ct.toLowerCase().indexOf("json") < 0;
+        if (foreign && tries < 1) {
+          return netProbe(true).then(function (p) {
+            if (!p || p.base === base) return resp;
+            return attempt(p.base, tries + 1);
+          });
+        }
+        return resp;
+      }).catch(function (err) {
+        if (tries < 1) {
+          return netProbe(true).then(function (p) {
+            if (!p) throw err;
+            return attempt(p.base, tries + 1);
+          });
+        }
+        throw err;
+      });
+    }
+    if (NET.base) return attempt(NET.base, 0);
+    return netProbe(false).then(function (p) { return attempt(p ? p.base : "", 0); });
+  }
+
   var api = {
     fs: function (op, body) { return netCall("api/fs/" + op, body || {}); },
     ftp: function (body) { return netCall("api/ftp", body); },
@@ -2013,7 +2064,11 @@
         getWeb: netGetWeb,
         info: function () { return NET.info; },
         base: function () { return NET.base; },
-        online: function () { return NET.online; }
+        online: function () { return NET.online; },
+        // 应用动态基址：换局域网/换设备后自动跟随电脑新 IP（详见 netFetch 注释）
+        mountUrl: netUrl,        // 同步：mountUrl("novel/api/meta")
+        resolveUrl: netResolve,  // 异步：确保探测完成后再拼地址（iframe.src 用）
+        fetch: netFetch          // 带自动重探重试的 fetch，返回原生 Response
       },
       vfs: vfs,
       debug: debugApi,
