@@ -15,6 +15,7 @@ from novacore.admin_app import create_admin_app
 from novacore.cdp_browser import CDP
 from novacore.netutil import local_ip, answer_ip
 from novacore.paths import set_slog_debug, slog_debug, slog
+from novacore import tray as tray_mod
 
 class ServerThread(threading.Thread):
     def __init__(self, app, host, port, name):
@@ -88,6 +89,11 @@ def main():
     print("=" * 60)
 
     stop_event = threading.Event()
+
+    # 启动托盘：成功后隐藏控制台窗口，仅右键菜单「打开管理界面 / 查看日志 / 退出」。
+    # 非 Windows 或初始化失败时保持控制台可见，便于排查。
+    tray = tray_mod.start(int(cfg("admin_port", 8899)), stop_event.set)
+
     try:
         signal.signal(signal.SIGINT, lambda *_: stop_event.set())
         signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
@@ -99,6 +105,8 @@ def main():
     except KeyboardInterrupt:
         pass
 
+    if tray:
+        tray.stop()
     print("正在停止...")
     CDP.stop()
     if dns:
