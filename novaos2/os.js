@@ -390,6 +390,264 @@
     }
   };
 
+  /* ---------------- 开发模式（DevLink）：电脑 ↔ 平板 双向命令通道 ----------------
+   * 电脑（127.0.0.1:8899 /api/dev/exec）把命令投进服务端队列；平板长轮询即刻
+   * 取回 → devExec 以全权限执行（eval 直接跑在本闭包作用域，可达 vfs/Store/
+   * NET/窗口管理等一切内部能力 + window.OS）→ POST sys/dev-result 回传，
+   * 电脑端阻塞等待的 exec 随即拿到结果。全程 POST + no-store，不占浏览器缓存；
+   * 稳态仅一个挂起长轮询，命令延迟 ≈ 内网一个 RTT。服务端见 novacore/devmode.py。
+   * 命令集（cmd / args）：
+   *   ping                       连通性自检
+   *   info                       系统一览（网络/应用清单/运行中/存储配额/统计）
+   *   eval    {code}             执行任意 JS，返回值序列化回传（支持 Promise）
+   *   storage {op,key,value}     localStorage 原始读写（get/set/del/keys/clear）
+   *   vfs     {op,path,to,...}   离线空间直通（list/get/put/del/mkdir/rename/usage/clear）
+   *   app     {op,id,arg}        应用控制（list/open/close）
+   *   toast   {msg,ms}           平板弹轻提示
+   *   lock                       立即锁屏
+   *   reload                     重载 OS 页面（先回传结果再重载）
+   *   dbg     {on}               开/关调试日志回传
+   *   emit    {evt,data}         广播系统事件 */
+  var DEV_KEY = "nova2.dev.token";
+  var dev = {
+    token: Store.get(DEV_KEY, ""),   // 会话令牌（服务端派发，失效自动重握手）
+    on: false,        // 已与电脑 devmode 服务握手并轮询中
+    off: false,       // 电脑端关闭了开发模式（config dev_mode=false）
+    wait: 25,         // 长轮询单次挂起秒数（hello 返回）
+    looping: false,   // 轮询链已启动（防重复）
+    cmds: 0, ok: 0, fail: 0,         // 累计执行统计
+    lastAt: 0,        // 最近一次收到命令的时间戳
+    backoff: 0        // 连续失败退避（ms）
+  };
+
+  function devState() {
+    return { on: dev.on, off: dev.off, token: dev.token, wait: dev.wait,
+             cmds: dev.cmds, ok: dev.ok, fail: dev.fail, lastAt: dev.lastAt };
+  }
+  function devChanged() { try { emit("dev-change", devState()); } catch (e) { } }
+
+  // 任意 JS 值 → 可 JSON 回传的近似值（函数/错误/DOM/Blob/循环引用均有兜底）
+  function devJson(v) {
+    var seen = [];
+    function repl(k, val) {
+      var t = typeof val;
+      if (t === "function") return "[fn " + (val.name || "anonymous") + "]";
+      if (t === "bigint") return String(val);
+      if (val instanceof Error) return val.name + ": " + val.message;
+      if (val && t === "object") {
+        if (val instanceof Date) return val.toISOString();
+        if (typeof Blob !== "undefined" && val instanceof Blob) return "[Blob " + val.size + "B]";
+        if (val === window) return "[window]";
+        if (val === document) return "[document]";
+        if (typeof Element !== "undefined" && val instanceof Element)
+          return "<" + val.tagName.toLowerCase() + (val.id ? "#" + val.id : "") + ">";
+        if (seen.indexOf(val) >= 0) return "[Circular]";
+        seen.push(val);
+      }
+      return val;
+    }
+    try { return JSON.parse(JSON.stringify(v, repl)); }
+    catch (e) { return String(v); }
+  }
+
+  /* 全权限命令路由：电脑下发的每条命令在此执行。
+   * eval 分支为「直接 eval」——代码串可读写本闭包全部内部变量，即完全控制平板 OS。 */
+  function devExec(cmd, args) {
+    args = args || {};
+    var op = String(args.op || "");
+    switch (String(cmd || "")) {
+      case "ping":
+        return { pong: true, t: Date.now(), ver: 1 };
+
+      case "info":
+        return Promise.resolve(
+          navigator.storage && navigator.storage.estimate
+            ? navigator.storage.estimate() : { note: "不支持 estimate" })
+          .then(function (st) {
+            return {
+              ua: navigator.userAgent, url: location.href,
+              screen: window.innerWidth + "x" + window.innerHeight + " @" + (window.devicePixelRatio || 1) + "x",
+              net: { base: NET.base, online: NET.online, info: NET.info },
+              apps: appList(), running: runningList(),
+              dev: devState(), storage: st
+            };
+          });
+
+      case "eval": {
+        // 任意 JS：用 Function 包裹，可写语句 + return（直接 eval 只认表达式）。
+        // 作用域为全局，可经 window.OS / window 拿到全部能力。
+        var code = args.code == null ? "" : String(args.code);
+        if (!code) return { error: "缺少 code" };
+        var fn;
+        try {
+          fn = new Function(code);
+        } catch (e) {
+          return { error: "语法错误：" + (e && e.message ? e.message : e), code: code.slice(0, 400) };
+        }
+        var rv;
+        try {
+          rv = fn.call(window);
+        } catch (e) {
+          return { error: String(e && e.stack ? e.stack : e), code: code.slice(0, 400) };
+        }
+        // 支持返回 Promise（异步命令）
+        if (rv && typeof rv.then === "function") {
+          return rv.then(function (v) { return devJson(v); },
+            function (e) { return { error: String(e && e.stack ? e.stack : e) }; });
+        }
+        return devJson(rv);
+      }
+
+      case "storage":
+        if (op === "get") return { value: localStorage.getItem(String(args.key || "")) };
+        if (op === "set") {
+          localStorage.setItem(String(args.key || ""),
+            typeof args.value === "string" ? args.value : JSON.stringify(args.value));
+          return { ok: true };
+        }
+        if (op === "del") { localStorage.removeItem(String(args.key || "")); return { ok: true }; }
+        if (op === "keys") {
+          var ks = [];
+          for (var ki = 0; ki < localStorage.length; ki++) ks.push(localStorage.key(ki));
+          return { keys: ks };
+        }
+        if (op === "clear") { localStorage.clear(); return { ok: true }; }
+        return { error: "storage 未知 op：" + op };
+
+      case "vfs": {
+        var vp = String(args.path || "");
+        if (op === "list") return vfs.list(vp);
+        if (op === "get") return vfs.get(vp);
+        if (op === "put") return vfs.put(vp, {
+          name: args.name || vp.split("/").pop(),
+          text: args.text, data: args.data, mime: args.mime
+        });
+        if (op === "del") return vfs.del(vp);
+        if (op === "mkdir") return vfs.mkdir(vp);
+        if (op === "rename") return vfs.rename(vp, String(args.to || ""));
+        if (op === "usage") return vfs.usage();
+        if (op === "clear") return vfs.clear();
+        return { error: "vfs 未知 op：" + op };
+      }
+
+      case "app":
+        if (op === "list" || !op) return { apps: appList(), running: runningList() };
+        if (op === "open") { openApp(String(args.id || ""), args.arg); return { ok: true }; }
+        if (op === "close") { closeApp(String(args.id || "")); return { ok: true }; }
+        return { error: "app 未知 op：" + op };
+
+      case "toast":
+        toast(String(args.msg == null ? "" : args.msg), args.ms); return { ok: true };
+
+      case "lock":
+        lockScreen(); return { ok: true };
+
+      case "reload":
+        setTimeout(function () { location.reload(); }, 400); return { reloading: true };
+
+      case "dbg":
+        if (args.on) dbgEnable(); else dbgDisable();
+        return { debug: !!args.on };
+
+      case "emit":
+        emit(String(args.evt || ""), args.data); return { ok: true };
+
+      default:
+        return { error: "未知命令：" + cmd + "（ping/info/eval/storage/vfs/app/toast/lock/reload/dbg/emit）" };
+    }
+  }
+
+  // 顺序执行一批命令，逐条回传结果（保持电脑端下发顺序）；单条结果超 4MB 截断
+  function devRunQueue(cmds) {
+    var i = 0;
+    function step() {
+      if (i >= cmds.length) return Promise.resolve();
+      var c = cmds[i++], t0 = Date.now();
+      return Promise.resolve().then(function () {
+        return devExec(c.cmd, c.args || {});
+      }).then(function (res) {
+        return { ok: true, data: res, ms: Date.now() - t0 };
+      }, function (err) {
+        return { ok: false, error: (err && err.message) ? err.message : String(err), ms: Date.now() - t0 };
+      }).then(function (res) {
+        dev.cmds++; if (res.ok) dev.ok++; else dev.fail++;
+        dev.lastAt = Date.now();
+        try { emit("dev-cmd", { cmd: c.cmd, args: c.args || {}, res: res }); } catch (e) { }
+        try { nvLog("info", "dev", "cmd " + c.cmd + " → " + (res.ok ? "ok" : "err") + " " + res.ms + "ms"); } catch (e) { }
+        var body = { token: dev.token, cid: c.cid, res: res };
+        var payload = "";
+        try { payload = JSON.stringify(body); } catch (e) { }
+        if (payload.length > 4 * 1024 * 1024) {
+          res.data = "[结果过大（" + (payload.length / 1048576).toFixed(1) + "MB），已截断]";
+          body = { token: dev.token, cid: c.cid, res: res };
+        }
+        return netCall("sys/dev-result", body);
+      }).then(step);
+    }
+    return step();
+  }
+
+  function devCall(kind, body) { return netCall("sys/dev-" + kind, body); }
+
+  /* 轮询主循环（单链）：无 token → hello 握手；有 token → 长轮询挂起。
+   * 断网指数退避（2s→15s）；电脑端关闭开发模式 → 60s 后再试。 */
+  function devLoop() {
+    var job = dev.token
+      ? devCall("poll", { token: dev.token, wait: dev.wait })
+      : netProbe(false).then(function (p) {
+        if (!p) return null;
+        return devCall("hello", {
+          token: dev.token || "", ver: 1,
+          ua: navigator.userAgent, url: location.href,
+          apps: appList().map(function (a) { return a.id; }),
+          scr: window.innerWidth + "x" + window.innerHeight
+        });
+      });
+    job.then(function (j) {
+      if (!j) return fail("网络不可达");
+      if (j.devoff) {
+        if (!dev.off) { dev.off = true; dev.on = false; devChanged(); }
+        return later(60000);
+      }
+      if (j.invalid) { dev.token = ""; Store.remove(DEV_KEY); return later(500); }
+      if (!j.ok) return fail(j.error || "dev 通道错误");
+      if (!dev.token) {          // hello 成功：记下会话令牌
+        dev.token = j.token; dev.wait = j.poll || 25;
+        Store.set(DEV_KEY, dev.token);
+        try { nvLog("info", "dev", "开发模式已连接 token=" + dev.token + " poll=" + dev.wait + "s"); } catch (e) { }
+      }
+      dev.backoff = 0;
+      if (!dev.on || dev.off) { dev.on = true; dev.off = false; devChanged(); }
+      var cmds = j.cmds || [];
+      var run = cmds.length ? devRunQueue(cmds) : Promise.resolve();
+      run.then(function () { later(cmds.length ? 30 : 150); },
+               function () { later(300); });
+    }, function () { fail("poll 网络异常"); });
+
+    function fail(why) {
+      dev.on = false;
+      dev.backoff = dev.backoff ? Math.min(15000, dev.backoff * 2) : 2000;
+      try { nvLog("warn", "dev", "开发通道断开（" + why + "），" + dev.backoff + "ms 后重连"); } catch (e) { }
+      devChanged(); later(dev.backoff);
+    }
+    function later(ms) { setTimeout(devLoop, ms); }
+  }
+
+  function devStart() {
+    if (dev.looping) return;
+    dev.looping = true;
+    devLoop();
+  }
+
+  // 供 devterm 终端应用本地复用（与电脑下发走同一条全权限路由）
+  var devApi = {
+    state: devState,
+    exec: function (cmd, args) {
+      return Promise.resolve().then(function () { return devExec(cmd, args); });
+    }
+  };
+
+
   /* ---------------- 调试模式：统一日志器 + console/异常/网络全采集 ----------------
    * 开关存 localStorage（nova2.debug），开启后：
    *   1) 日志批量 POST 到 sys/log，电脑端按天落 logs/tablet-YYYYMMDD.log
@@ -1462,17 +1720,31 @@
     return chain;
   }
 
-  // 预装：仓库里标记 preinstall 的应用包，开机时若从未装过则静默安装。
-  // 装成功即记入 nova2.preinstall.done —— 用户此后卸载不会每次开机又被装回来。
+  // 预装：仓库里标记 preinstall 的应用包，开机时静默安装/升级。
+  // 记 nova2.preinstall.done = {id: 已装版本}：
+  //   - 从未装过 → 安装；
+  //   - 已装但仓库版本更高 → 静默升级（保证预装包在电脑端更新后能刷到设备）；
+  //   - 用户主动卸载（版本记录被清）→ 不再回装。
   function preinstallApps() {
     return pkgApi.catalog().then(function (list) {
-      var done = Store.get("nova2.preinstall.done", []);
-      if (!Array.isArray(done)) done = [];
-      var todo = (list || []).filter(function (a) {
-        return a && a.preinstall && a.file && done.indexOf(a.id) < 0 && !apps[a.id] &&
-          !appsRegGet().some(function (m) { return m.id === a.id; });
+      var reg = Store.get("nova2.preinstall.done", []);
+      if (!Array.isArray(reg)) reg = [];
+      var seen = {};                       // 兼容旧格式（纯 id 数组）
+      reg.forEach(function (x) {
+        if (typeof x === "string") seen[x] = "";
+        else if (x && x.id) seen[x.id] = String(x.version || "");
       });
-      if (todo.length) nvLog("info", "pkg", "待预装应用：" + todo.map(function (a) {
+      var installed = {};
+      appsRegGet().forEach(function (m) { installed[m.id] = String(m.version || ""); });
+
+      var todo = (list || []).filter(function (a) {
+        if (!a || !a.preinstall || !a.file) return false;
+        if (apps[a.id] && apps[a.id].def && apps[a.id].def.builtin) return false;
+        var cur = installed[a.id] || seen[a.id];
+        if (cur === undefined) return true;          // 从未装过 → 装
+        return cmpVer(a.version, cur) > 0;           // 已装且仓库更新 → 升级
+      });
+      if (todo.length) nvLog("info", "pkg", "待预装/升级应用：" + todo.map(function (a) {
         return a.id + "@" + a.version;
       }).join(", "));
       var chain = Promise.resolve();
@@ -1485,9 +1757,13 @@
               ((r.blob && r.blob.size) || 0) + " 字节");
             return pkgApi.install(r.blob);
           }).then(function () {
-            done = Store.get("nova2.preinstall.done", []);
-            if (!Array.isArray(done)) done = [];
-            if (done.indexOf(a.id) < 0) { done.push(a.id); Store.set("nova2.preinstall.done", done); }
+            var d2 = Store.get("nova2.preinstall.done", []);
+            if (!Array.isArray(d2)) d2 = [];
+            d2 = d2.filter(function (x) {
+              return (typeof x === "string" ? x : (x && x.id)) !== a.id;
+            });
+            d2.push({ id: a.id, version: String(a.version) });
+            Store.set("nova2.preinstall.done", d2);
             nvLog("info", "pkg", "预装成功：" + a.id + "@" + a.version);
             if (desktopReady) renderDesktop();
           })["catch"](function (e) {
@@ -1588,6 +1864,21 @@
       var list = appsRegGet().filter(function (m) { return m.id !== regItem.id; });
       list.push(regItem);
       appsRegSet(list);
+      // 更新场景：先清掉该应用的旧资源 blob 网址——否则 appAssetUrl 会一直返回
+      // 指向旧代码/旧图片的网址，表现为“更新了还是旧界面”。
+      clearPkgUrls(regItem.id);
+      // 若该应用此前已注册（更新），先摘除旧实例定义，避免 registerApp 因
+      // 内存里 def 仍在而误判为“无变化”跳过替换；窗口/根节点一并关闭，
+      // 下次打开即执行新代码。
+      var oldRec = apps[regItem.id];
+      if (oldRec) {
+        if (oldRec.win) { try { oldRec.win.close(); } catch (e) { } }
+        if (oldRec.root && oldRec.root.parentNode) {
+          try { oldRec.root.parentNode.removeChild(oldRec.root); } catch (e) { }
+        }
+        delete apps[regItem.id];
+        appOrder = appOrder.filter(function (x) { return x !== regItem.id; });
+      }
       return loadInstalledApp(regItem).then(function () {
         pg("done", 1, 1);
         return regItem;
@@ -1604,18 +1895,32 @@
     }
     delete apps[id];
     appOrder = appOrder.filter(function (x) { return x !== id; });
+    clearPkgUrls(id);
+    appsRegSet(appsRegGet().filter(function (m) { return m.id !== id; }));
+    // 用户主动卸载：清掉预装记录，保证不会被开机预装逻辑再装回来
+    // （即便仓库里之后出了该应用的新版本）。
+    var pd = Store.get("nova2.preinstall.done", []);
+    if (Array.isArray(pd)) {
+      var pd2 = pd.filter(function (x) {
+        return (typeof x === "string" ? x : (x && x.id)) !== id;
+      });
+      if (pd2.length !== pd.length) Store.set("nova2.preinstall.done", pd2);
+    }
+    return vfs.del(APPS_ROOT + "/" + id)["catch"](function () { return null; })
+      .then(function () { if (desktopReady) renderDesktop(); return { ok: true }; });
+  }
+
+  // 应用运行时取包内资源的 blob 网址（应用内 iframe/图片等使用）
+  // 释放某应用已生成的全部 blob 网址（更新/卸载时调用，防止旧代码残留）。
+  function clearPkgUrls(id) {
     Object.keys(pkgUrlCache).forEach(function (k) {
       if (k.indexOf(id + "/") === 0) {
         try { URL.revokeObjectURL(pkgUrlCache[k]); } catch (e) { }
         delete pkgUrlCache[k];
       }
     });
-    appsRegSet(appsRegGet().filter(function (m) { return m.id !== id; }));
-    return vfs.del(APPS_ROOT + "/" + id)["catch"](function () { return null; })
-      .then(function () { if (desktopReady) renderDesktop(); return { ok: true }; });
   }
 
-  // 应用运行时取包内资源的 blob 网址（应用内 iframe/图片等使用）
   function appAssetUrl(id, rel) {
     rel = String(rel || "").replace(/^\/+/, "");
     var key = id + "/" + rel;
@@ -1845,7 +2150,8 @@
         source: opts.source || "fs",
         path: opts.path || "",
         mode: opts.mode || "open",
-        filter: opts.filter || null
+        filter: opts.filter || null,
+        name: opts.name || ""
       });
     });
   }
@@ -2072,6 +2378,7 @@
       },
       vfs: vfs,
       debug: debugApi,
+      dev: devApi,        // 开发模式终端用：state()/exec(cmd,args) 全权限本地执行
       // 全系统统一日志：OS.log(tag, 任意内容..., level?) / OS.logerr(tag, err, 上下文)
       // 调试开关关时仅 console；开启后同时回传电脑 + 写离线空间 /日志/
       log: function (tag) {
@@ -2150,6 +2457,9 @@
 
     // 后台预热：判定劫持同源 / 热点直连 / 完全离线，供文件应用即时使用
     setTimeout(function () { netProbe(false); }, 800);
+
+    // 开发模式：桌面就绪后启动 DevLink 长轮询链（电脑可随时接入下发命令）
+    setTimeout(devStart, 1200);
   }
 
   // nova.html 末尾会调用 OS.boot()；此处兜底（脚本顺序变化时也能启动）

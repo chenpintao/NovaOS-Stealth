@@ -126,11 +126,10 @@
     <h2>服务与 DNS</h2>
     <div class="row"><label class="req">HTTP 端口</label><input type="number" id="http_port" min="1" max="65535"></div>
     <div class="row"><label class="req">管理界面端口</label><input type="number" id="admin_port" min="1" max="65535"></div>
-    <h2 style="margin-top:10px;font-size:13px;color:var(--sub)">远程浏览器（CDP 画面代理）</h2>
-    <div class="row"><label>画面宽(px)</label><input type="number" id="cdp_width" min="640" max="3840"></div>
-    <div class="row"><label>画面高(px)</label><input type="number" id="cdp_height" min="480" max="2160"></div>
-    <div class="row"><label>JPEG 画质</label><input type="number" id="cdp_quality" min="10" max="100"></div>
-    <div class="hint">范围：宽 640–3840、高 480–2160、画质 10–100。画质越高越清晰但越费带宽；保存后需在远程浏览器里重新启动（关闭再打开应用）生效。</div>
+    <h2 style="margin-top:10px;font-size:13px;color:var(--sub)">网页浏览器（内置代理）</h2>
+    <div class="row"><label>启用内置代理</label><div><input type="checkbox" id="webproxy_enable"></div></div>
+    <div class="row"><label>内置代理端口</label><input type="number" id="webproxy_port" min="1" max="65535"></div>
+    <div class="hint">网页浏览器出站走本机内置正向代理（HTTP 转发 + HTTPS CONNECT 隧道），仅监听 127.0.0.1，不对外暴露。修改端口后需重启服务生效。</div>
     <div class="row"><label>启用 DNS 应答</label><div><input type="checkbox" id="dns_enable"></div></div>
     <div class="hint">热点模式（模式1）：平板连电脑热点，自动劫持下列域名到本机。局域网模式（模式2）：把平板 Wi-Fi 的 DNS 手动设为电脑局域网 IP，照常打开「在线专栏」即可，无需输网址。</div>
     <div class="row"><label class="req">应答域名(每行一个)</label>
@@ -161,14 +160,14 @@
 </details>
 
 <script>
-const NUM = {trigger_tap_count:1,trigger_tap_radius:1,trigger_tap_interval_ms:1,http_port:1,admin_port:1,cdp_width:1,cdp_height:1,cdp_quality:1};
+const NUM = {trigger_tap_count:1,trigger_tap_radius:1,trigger_tap_interval_ms:1,http_port:1,admin_port:1,webproxy_port:1};
 function el(id){return document.getElementById(id);}
 const IDS = ["inject_enable","inject_path_pattern","serve_host","mount","novaos_dir","fs_root","strip_ga","cache_poison",
   "trigger_hotkey_enable","trigger_hotkey_key","trigger_hotkey_ctrl","trigger_hotkey_shift","trigger_hotkey_alt",
   "trigger_tap_enable","trigger_tap_corner","trigger_tap_count","trigger_tap_radius","trigger_tap_interval_ms",
   "trigger_urlparam_enable","trigger_urlparam_name","trigger_urlparam_value",
   "trigger_search_enable","trigger_search_keyword","exit_action",
-  "http_port","admin_port","cdp_width","cdp_height","cdp_quality",
+  "http_port","admin_port","webproxy_enable","webproxy_port",
   "dns_enable","hijack_domains","dns_upstreams","answer_ip","debug"];
 
 function box(id){const e=el(id);return e.type==="checkbox"?e.checked:e.value;}

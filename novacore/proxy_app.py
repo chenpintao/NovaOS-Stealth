@@ -23,7 +23,7 @@ from novacore.htmlkit import (
 )
 from novacore.netutil import resolve_external
 from novacore.sources import lan_hosts, serve_nova_api, api_preflight
-from novacore.cdp_browser import serve_nova_cdp
+from novacore.web_proxy import serve_web_proxy
 from novacore.novel_dl import proxy_novel
 from novacore import toolkit
 
@@ -39,10 +39,10 @@ def create_proxy_app():
             write_access("%s %s host=%s %s %s -> %s UA=%s" % (
                 time.strftime("%Y-%m-%d %H:%M:%S"), request.remote_addr,
                 request.host, request.method, path, resp.status_code, ua))
-            # 挂载点下 API/系统/CDP 请求的 4xx/5xx 单独进服务端诊断日志（故障第一现场）
+            # 挂载点下 API/系统/网页代理 请求的 4xx/5xx 单独进服务端诊断日志（故障第一现场）
             if resp.status_code >= 400 and ("/api/" in request.path or
                                            "/sys/" in request.path or
-                                           "/cdp/" in request.path):
+                                           "/wp/" in request.path):
                 slog("warn", "http", "%s %s -> %s（UA=%s）" % (
                     request.method, path[:300], resp.status_code, ua[:80]))
         except Exception:
@@ -196,9 +196,9 @@ def create_proxy_app():
         valid_hosts = set([str(cfg("serve_host", "")).lower()]) | lan_hosts()
         if host in valid_hosts and ("/" + path).startswith(prefix):
             rel = ("/" + path)[len(prefix):]
-            # CDP 远程浏览器：SSE 帧流 + 控制（需在 api/ 之前，stream 不是 JSON）
-            if rel.startswith("cdp/"):
-                return serve_nova_cdp(rel[4:], request.method)
+            # 网页代理：同源改写任意站点（含 HTTPS），供内置浏览器使用
+            if rel.startswith("wp/"):
+                return serve_web_proxy(rel[3:], request.method)
             # 平板同源系统操作：更新缓存版本号、下载备份 zip（管理端口仅本机可达，故挂这里）
             if rel.startswith("sys/"):
                 if request.method == "OPTIONS":
@@ -253,6 +253,11 @@ def create_proxy_app():
                         request.remote_addr, body.get("logs", []),
                         request.headers.get("User-Agent", ""))
                     return jsonify({"ok": True, "received": n})
+                # 开发模式：平板 ↔ 电脑 双向命令通道（hello/poll/result，
+                # 长轮询挂起由 werkzeug threaded 支持，逻辑见 novacore.devmode）
+                if sub.startswith("dev-") and request.method == "POST":
+                    from novacore import devmode
+                    return devmode.handle_sys(sub[4:])
                 # Tzy 应用仓库：目录清单 + 包文件下载（.tzyp）
                 if sub == "app-catalog" and request.method in ("GET", "HEAD", "POST"):
                     return jsonify({"ok": True, "apps": toolkit.app_repo_catalog()})

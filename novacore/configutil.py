@@ -98,13 +98,10 @@ def validate(c):
     need(int(as_int(c.get("http_port")) or 0) != int(as_int(c.get("admin_port")) or -1),
          "admin_port", "管理端口不能与 HTTP 端口相同")
 
-    # CDP 远程浏览器画面参数（缺省沿用默认值，不在配置里也不报错）
-    cdp_ranges = (("cdp_width", 640, 3840), ("cdp_height", 480, 2160),
-                  ("cdp_quality", 10, 100), ("cdp_fps", 5, 30))
-    for k, lo, hi in cdp_ranges:
-        if c.get(k) is not None:
-            v = as_int(c.get(k))
-            need(v is not None and lo <= v <= hi, k, "需为 %d-%d 的整数" % (lo, hi))
+    # 内置正向代理（网页代理出站通道）监听端口
+    if c.get("webproxy_port") is not None:
+        v = as_int(c.get("webproxy_port"))
+        need(v is not None and 1 <= v <= 65535, "webproxy_port", "需为 1-65535 的整数")
 
     # 小说下载后端（本机 novelsrc 聚合服务）监听端口
     if c.get("novel_port") is not None:

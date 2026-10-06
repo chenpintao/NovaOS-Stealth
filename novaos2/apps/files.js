@@ -58,7 +58,7 @@
     name: "文件管理",
     icon: "🗂",
     tone: "tone-red",
-    version: "3.2.0",
+    version: "3.3.0",
     open: function (root, OS) { build(root, OS); },
     onArg: function (root, arg) {
       // 系统级文件选择对话框：OS.pickFile() 调起
@@ -204,6 +204,19 @@
     /* ---------- 路径面包屑 ---------- */
     var crumbs = OS.h("div", "nv-crumbs");
 
+    /* ---------- pick 保存模式：另存到当前文件夹（空目录也可保存） ---------- */
+    var pickSaveBar = OS.h("div", "nv-toolbar nv-pick-save");
+    pickSaveBar.style.display = "none";
+    var pickSaveName = document.createElement("input");
+    pickSaveName.type = "text";
+    pickSaveName.className = "nv-vb-addr";
+    pickSaveName.placeholder = "文件名";
+    var pickSaveGo = OS.h("button", "nv-btn primary", "保存到当前文件夹");
+    var pickSaveCancel = OS.h("button", "nv-btn ghost", "取消");
+    pickSaveBar.appendChild(pickSaveName);
+    pickSaveBar.appendChild(pickSaveGo);
+    pickSaveBar.appendChild(pickSaveCancel);
+
     /* ---------- 列表 ---------- */
     var list = OS.h("div", "nv-list");
     var statusLine = OS.h("div", "nv-status-line", "就绪");
@@ -212,6 +225,7 @@
     root.appendChild(batchBar);
     root.appendChild(thead);
     root.appendChild(crumbs);
+    root.appendChild(pickSaveBar);
     root.appendChild(list);
     root.appendChild(statusLine);
 
@@ -1485,15 +1499,37 @@
 
     /* ---------- 系统级文件选择模式 ---------- */
     state.enterPickMode = function (arg) {
-      state.pickMode = { mode: arg.mode || "open", filter: arg.filter || null };
+      state.pickMode = { mode: arg.mode || "open", filter: arg.filter || null, name: arg.name || "" };
       state.source = arg.source || "fs";
       state.path = arg.path || "";
       state.conn = (state.source === "ftp" || state.source === "smb")
         ? OS.store.get(CFG_KEYS[state.source], null) : null;
       // pick 模式下隐藏批量栏
       batchBar.style.display = "none";
+      // 保存模式：另存栏（输入文件名 → 保存到当前文件夹；取消则放弃）
+      if (state.pickMode.mode === "save") {
+        pickSaveBar.style.display = "";
+        pickSaveName.value = state.pickMode.name || "";
+      } else {
+        pickSaveBar.style.display = "none";
+      }
       refresh();
     };
+
+    function pickSaveDone() {
+      var name = (pickSaveName.value || "").trim().replace(/[\\/]/g, "");
+      if (!name) { OS.toast("请输入文件名"); return; }
+      OS._pickDone({ source: state.source, path: joinPath(state.path, name), name: name });
+      OS.closeApp("files");
+    }
+    pickSaveGo.addEventListener("click", pickSaveDone);
+    pickSaveName.addEventListener("keydown", function (e) {
+      if ((e.key || "") === "Enter") { e.preventDefault(); pickSaveDone(); }
+    });
+    pickSaveCancel.addEventListener("click", function () {
+      OS._pickDone(null);
+      OS.closeApp("files");
+    });
 
     /* 初始 */
     var savedSort = OS.store.get(SORT_KEY, null);

@@ -63,7 +63,6 @@ Write-Host "[*] Installing pip into runtime ..."
 $pinned = @(
     "flask==3.0.3",
     "requests==2.32.4",
-    "websocket-client==1.8.0",
     "beautifulsoup4==4.15.0",
     "lxml==5.4.0",
     "pycryptodome==3.24.0",
@@ -98,7 +97,7 @@ Remove-Item (Join-Path $RT "_sqlite3.pyd"), (Join-Path $RT "sqlite3.dll"),
 
 # ---- 6) verify ----
 Write-Host "[6/6] Verifying ..."
-& (Join-Path $RT "python.exe") -c "import flask,requests,websocket,bs4,lxml.etree,Crypto,cryptography,ebooklib,charset_normalizer;print('runtime ok')"
+& (Join-Path $RT "python.exe") -c "import flask,requests,bs4,lxml.etree,Crypto,cryptography,ebooklib,charset_normalizer;print('runtime ok')"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[!] runtime verification FAILED"
     exit 1

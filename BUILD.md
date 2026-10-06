@@ -14,7 +14,7 @@ Loshop & Cpt
 | 构建机 | Windows 10 / 11（仅打包时需要；Wi-Fi 热点模式运行需带无线网卡） |
 | 构建机 Python | 任意 3.8+（仅用于跑打包脚本可选的预检，**不用于运行**） |
 | 目标机 | Windows 7 SP1 / 8.1 / 10 / 11，**无需安装 Python** |
-| Chrome | 目标机已装 Google Chrome 或 Edge（仅「远程浏览器」应用需要，用于 headless CDP） |
+| Chrome | 不需要（网页浏览器为纯 Python 同源改写代理，无外部浏览器依赖） |
 | 权限 | 模式 1（DNS 劫持 53 端口、80 端口、开热点）必须管理员；模式 2 局域网模式可用高端口 |
 | 磁盘 | 源码约 8MB；含 runtime 的完整包解压后约 40MB，zip 约 15MB |
 
@@ -78,7 +78,6 @@ pip/setuptools、头文件、测试数据，最终约 40MB）：
 | --- | --- | --- |
 | flask / werkzeug / jinja2 | 3.0.3 / 3.0.6 / 3.1.6 | `novel_server.py` HTTP 后端 |
 | requests / urllib3 / certifi / idna / charset-normalizer | 2.32.4 … | 抓取书源（含 GBK 嗅探） |
-| websocket-client | 1.8.0 | CDP 远程浏览器 |
 | beautifulsoup4 / soupsieve / lxml | 4.15.0 / 5.4.0 | HTML 解析 |
 | pycryptodome / cryptography / cffi | 3.24.0 / 47.0.0 | 加密书源解密 |
 | ebooklib / six | 0.20 / 1.17.0 | EPUB 导出 |
@@ -88,7 +87,7 @@ pip/setuptools、头文件、测试数据，最终约 40MB）：
 ```
 TzyOS\
 ├─ runtime\python\python.exe   内嵌便携 Python 3.8（含全部依赖）
-├─ novaosd.py                  总入口（DNS+HTTP+CDP+管理）
+├─ novaosd.py                  总入口（DNS+HTTP+内置代理+管理）
 ├─ server.py                   旧入口兼容 shim
 ├─ novel_server.py             📚 小说下载后端（Flask，按需被子进程拉起）
 ├─ novacore\                   服务端功能包
@@ -186,7 +185,7 @@ build_all.bat         组装 dist\TzyOS\ + 自动压缩为 dist\TzyOS.zip
 novaosd.py            总入口（转发 novacore.service.main）
 server.py             旧入口兼容 shim
 novel_server.py       📚 小说下载后端入口（Flask，子进程）
-novacore/             服务端功能包（config/net/dns/htmlkit/sources/cdp/toolkit/novel_dl/...）
+novacore/             服务端功能包（config/net/dns/htmlkit/sources/proxy_engine/web_proxy/toolkit/novel_dl/...）
 novelsrc/             19 个中文书源 + facade + http 客户端
 tools/                setup / update / backup 三个 CLI
 novaos2/              平板 OS 页面与应用

@@ -12,7 +12,7 @@ from novacore.configutil import CONFIG, load_config, validate, cfg, mount_prefix
 from novacore.dns_service import DNSThread
 from novacore.proxy_app import create_proxy_app
 from novacore.admin_app import create_admin_app
-from novacore.cdp_browser import CDP
+from novacore.proxy_engine import PROXY
 from novacore.netutil import local_ip, answer_ip
 from novacore.paths import set_slog_debug, slog_debug, slog
 from novacore import tray as tray_mod
@@ -58,6 +58,9 @@ def main():
 
     proxy = ServerThread(create_proxy_app(), "0.0.0.0", int(cfg("http_port", 80)), "HTTP")
     proxy.start()
+    # 内置正向代理：为网页代理提供出站通道（HTTP 转发 + HTTPS CONNECT 隧道）
+    if cfg("webproxy_enable", True):
+        PROXY.start("127.0.0.1", int(cfg("webproxy_port", 18087)))
     admin = ServerThread(create_admin_app(), "127.0.0.1", int(cfg("admin_port", 8899)), "ADMIN")
     admin.start()
     slog("info", "boot", "HTTP :%s / ADMIN 127.0.0.1:%s 已监听（lan_mode=%s）" %
@@ -108,7 +111,7 @@ def main():
     if tray:
         tray.stop()
     print("正在停止...")
-    CDP.stop()
+    PROXY.stop()
     if dns:
         dns.stop()
     proxy.stop()

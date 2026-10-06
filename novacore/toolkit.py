@@ -12,19 +12,28 @@ from novacore.paths import HERE, CONFIG_PATH, LOADER_PATH, BOOT_STUB_PATH, BRIDG
 
 def bump_entry_versions():
     """把 novaos2 下所有入口 HTML 中本地引用的 ?v=N 重写为文件 mtime。
+    递归扫描全部 .html（含 apps/、lib/ 等子目录内的页面），引用按该 HTML
+    所在目录解析；跳过 dist/archive/logs/node_modules 等非运行目录。
     返回 (changed:list[str], errors:list[str])。"""
     root = novaos_dir()
     changed = []
     errors = []
-    pat = re.compile(r'((?:src|href)=")([^":/#][^"?]*)\?v=\d+(")')
+    # 支持 相对路径（apps/x.js）、根相对（/apps/x.js）两种写法；
+    # 排除 http(s):// 等带协议的绝对外链与 data: 内联。
+    pat = re.compile(r'((?:src|href)=")(/?(?!https?:|data:|#)[^"?]+)\?v=\d+(")')
+    skip_dirs = {"dist", "archive", "logs", "node_modules", "__pycache__", ".git"}
 
     def bump_html(html_path):
         with open(html_path, "r", encoding="utf-8") as f:
             html = f.read()
+        base_dir = os.path.dirname(html_path)
 
         def repl(m):
             rel = m.group(2)
-            fp = os.path.join(root, rel.replace("/", os.sep))
+            if rel.startswith("/"):                 # 根相对 → 以 novaos2 根为基准
+                fp = os.path.join(root, rel.lstrip("/").replace("/", os.sep))
+            else:                                   # 普通相对 → 以该 HTML 所在目录为基准
+                fp = os.path.normpath(os.path.join(base_dir, rel.replace("/", os.sep)))
             if not os.path.isfile(fp):
                 return m.group(0)
             v = str(int(os.path.getmtime(fp)))
@@ -40,9 +49,14 @@ def bump_entry_versions():
                 f.write(new_html)
 
     try:
-        for name in os.listdir(root):
-            if name.endswith(".html"):
-                bump_html(os.path.join(root, name))
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+            for name in filenames:
+                if name.endswith(".html"):
+                    try:
+                        bump_html(os.path.join(dirpath, name))
+                    except Exception as e:
+                        errors.append("%s: %s" % (name, e))
     except Exception as e:
         errors.append(str(e))
     return changed, errors

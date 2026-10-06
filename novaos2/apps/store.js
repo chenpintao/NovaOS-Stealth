@@ -14,6 +14,10 @@
     icon: "🛍️",
     tone: "tone-purple",
     version: "1.0.0",
+    // 已打开时再次点击桌面图标进入：刷新仓库目录（电脑端可能已放入新包）
+    onArg: function (root) {
+      if (root && root._nvRefresh) { try { root._nvRefresh(); } catch (e) { } }
+    },
     open: function (root, OS) {
       var tab = "repo";
       var catalog = [];
@@ -80,6 +84,21 @@
         render();
       }
       btnReload.addEventListener("click", render);
+
+      // 供 openApp 再次进入（onArg）与系统回前台时刷新仓库，避免看到旧列表
+      root._nvRefresh = function () {
+        if (busy) return;
+        switchTab("repo");
+      };
+      // 从后台切回前台：重新拉取仓库目录（电脑端 apps_repo 可能已更新）
+      if (!root._nvVisBound) {
+        root._nvVisBound = true;
+        document.addEventListener("visibilitychange", function () {
+          if (document.visibilityState === "visible" && root._nvRefresh) {
+            try { root._nvRefresh(); } catch (e) { }
+          }
+        });
+      }
 
       /* ---------------- 安装核心 ---------------- */
       function installBlob(blob, title) {

@@ -94,4 +94,15 @@ def create_admin_app():
                                    (resolve_external("web-alicdn.zyai.cc")))()
         })
 
+    # ---- 开发模式：电脑侧控制端（逻辑见 novacore.devmode）----
+    @app.route("/api/dev/status", methods=["GET"])
+    def dev_status():
+        from novacore import devmode
+        return devmode.admin_status()
+
+    @app.route("/api/dev/exec", methods=["POST"])
+    def dev_exec():
+        from novacore import devmode
+        return devmode.admin_exec()
+
     return app

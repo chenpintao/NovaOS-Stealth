@@ -59,7 +59,7 @@ def slog_debug():
 
 
 def slog(level, tag, msg=""):
-    """level: debug/info/warn/error；tag: 模块短名（如 music/net/cdp）。"""
+    """level: debug/info/warn/error；tag: 模块短名（如 music/net/proxy）。"""
     lv = str(level or "info").lower()
     if lv not in _LEVELS:
         lv = "info"

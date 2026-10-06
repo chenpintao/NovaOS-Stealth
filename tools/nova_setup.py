@@ -21,14 +21,6 @@ sys.path.insert(0, ROOT)
 CONFIG_PATH = os.path.join(ROOT, "config.json")
 REQUIREMENTS = os.path.join(ROOT, "requirements.txt")
 
-CHROME_CANDIDATES = [
-    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-    os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
-    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-]
-
 
 def is_admin():
     try:
@@ -38,9 +30,6 @@ def is_admin():
 
 
 def find_chrome():
-    for p in CHROME_CANDIDATES:
-        if os.path.isfile(p):
-            return p
     return None
 
 
@@ -80,7 +69,7 @@ def install_deps():
 
 def check_modules():
     missing = []
-    for mod in ("flask", "requests", "websocket"):
+    for mod in ("flask", "requests"):
         try:
             __import__(mod)
         except ImportError:
@@ -113,9 +102,7 @@ def preflight():
         print("[!] Missing core modules   :", ", ".join(missing))
         ok = False
     else:
-        print("[*] Core python modules     : OK (flask, requests, websocket)")
-    chrome = find_chrome()
-    print("[*] Chrome/Edge for CDP      :", chrome or "NOT FOUND (remote browser disabled)")
+        print("[*] Core python modules     : OK (flask, requests)")
     print("[*] config.json              :", "OK" if os.path.isfile(CONFIG_PATH) else "MISSING")
     print("[*] novaos2/index.html       :",
           "OK" if os.path.isfile(os.path.join(ROOT, "novaos2", "index.html")) else "MISSING")

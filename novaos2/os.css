@@ -853,30 +853,84 @@ button { font-family: inherit; }
 }
 .nv-img-close:active { background: var(--cinnabar); }
 
-/* ================= 远程浏览器（CDP 直推） ================= */
+/* ================= 网页浏览器（同源改写代理 + iframe） ================= */
 .nv-vb-addr {
   -webkit-box-flex: 1; flex: 1;
   min-width: 0;
   height: 32px;
   padding: 0 10px;
-  border: 1px solid var(--line);
+  border: 1px solid #cbbfa6;
   border-radius: 8px;
-  background: #fff;
+  background: #fffdf8;
   font-size: 13.5px;
-  color: var(--text);
+  color: #26282d;
 }
+.nv-vb-addr:focus { outline: none; border-color: var(--gold); }
+/* 浏览器工具栏显式建立层叠层级：iframe 会被浏览器提升为独立合成层，
+   无 z-index 的兄弟元素会被它盖住（表现为网页盖住地址栏）。 */
+.nv-vb-bar { position: relative; z-index: 2; }
 .nv-vb-view {
   -webkit-box-flex: 1; flex: 1 1 auto;
   min-height: 0;
-  background: #101318;
-  display: -webkit-box; display: flex;
-  -webkit-box-align: center; align-items: center;
-  -webkit-box-pack: center; justify-content: center;
+  background: #fff;
+  position: relative;
+  z-index: 0;
   overflow: hidden;
 }
-.nv-vb-canvas {
-  touch-action: none;
-  -webkit-user-select: none; user-select: none;
+.nv-vb-frame {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  border: 0; display: block; background: #fff;
+  z-index: 0;
+}
+/* 星标（收藏）：未收藏淡金，已收藏朱砂 */
+.nv-btn.star-on { border-color: var(--cinnabar); color: var(--cinnabar); }
+/* 收藏夹/历史 面板：只盖住网页视图区（在工具栏之下），不遮挡地址栏 */
+.nv-vb-panel {
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 1;
+  background: var(--paper);
+  display: -webkit-box; display: flex;
+  -webkit-box-orient: vertical; flex-direction: column;
+}
+.nv-vb-panel-head {
+  display: -webkit-box; display: flex;
+  -webkit-box-align: center; align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid #e8e0cf;
+  background: #fbf8f1;
+}
+.nv-vb-panel-title { font-size: 14px; color: #3a3328; margin-right: 8px; }
+.nv-vb-panel-body {
+  -webkit-box-flex: 1; flex: 1 1 auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.nv-vb-item {
+  display: -webkit-box; display: flex;
+  -webkit-box-align: center; align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid #e8e0cf;
+  cursor: pointer;
+  min-height: 46px;
+}
+.nv-vb-item:active { background: #efe8d8; }
+.nv-vb-item-main {
+  -webkit-box-flex: 1; flex: 1; min-width: 0;
+  margin-right: 8px;
+}
+.nv-vb-item-title {
+  font-size: 13.5px; color: #26282d;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.nv-vb-item-sub {
+  font-size: 11.5px; color: #6b6252;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  margin-top: 2px;
+}
+.nv-vb-empty {
+  padding: 28px 16px;
+  text-align: center;
+  font-size: 13px; color: #6b6252;
 }
 
 /* ================= Phigros 模拟器（内嵌 sim-phi iframe） ================= */
@@ -1083,3 +1137,74 @@ button { font-family: inherit; }
 }
 .nv-lrc-line.dim { color: #c4c1d0; }
 .nv-lrc-line.on { color: #5b3fd6; font-weight: 600; font-size: 16px; }
+
+/* ============ 开发终端（devterm，v1.0.0，Loshop & Cpt） ============ */
+.nv-term {
+  position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+  display: -webkit-box; display: flex;
+  -webkit-box-orient: vertical; -webkit-box-direction: normal;
+          flex-direction: column;
+  background: #14161b; color: #d8d2c4;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 13px;
+}
+.nv-term-bar {
+  -webkit-box-flex: 0; flex: 0 0 auto;
+  display: -webkit-box; display: flex;
+  -webkit-box-align: center; align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: #1d2027;
+  border-bottom: 1px solid #2a2e38;
+  font-size: 12.5px;
+}
+.nv-term-bar .nv-btn {
+  border-color: #2f3542; background: #262a33; color: #cfc9bb;
+  padding: 5px 11px; font-size: 12px; border-radius: 7px;
+}
+.nv-term-bar .nv-btn:active { background: #323846; }
+.nv-term-bar .nv-btn.primary { background: var(--cinnabar); border-color: var(--cinnabar); color: #fff; }
+.nv-term-dot {
+  -webkit-box-flex: 0; flex: 0 0 auto;
+  width: 9px; height: 9px; border-radius: 50%;
+  background: #6b7280; box-shadow: 0 0 0 3px rgba(107,114,128,.18);
+}
+.nv-term-dot.on { background: #4cc38a; box-shadow: 0 0 0 3px rgba(76,195,138,.2); }
+.nv-term-dot.off { background: var(--cinnabar); box-shadow: 0 0 0 3px rgba(192,63,45,.2); }
+.nv-term-st { color: #e8e2d4; }
+.nv-term-tok { color: #7f8899; }
+.nv-term-cnt { color: #7f8899; }
+.nv-term-gap { -webkit-box-flex: 1; flex: 1 1 auto; }
+.nv-term-out {
+  -webkit-box-flex: 1; flex: 1 1 auto;
+  overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding: 10px 12px;
+  line-height: 1.6;
+  -webkit-user-select: text; user-select: text;
+}
+.nv-term-ln {
+  white-space: pre-wrap; word-break: break-all;
+  color: #d8d2c4;
+  padding: 1px 0;
+}
+.nv-term-ln.in { color: var(--gold); }
+.nv-term-ln.err { color: #e08a7a; }
+.nv-term-ln.sys { color: #7f8899; }
+.nv-term-in {
+  -webkit-box-flex: 0; flex: 0 0 auto;
+  display: -webkit-box; display: flex;
+  -webkit-box-align: center; align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #1d2027;
+  border-top: 1px solid #2a2e38;
+}
+.nv-term-prompt { color: var(--gold); font-weight: 700; }
+.nv-term-input {
+  -webkit-box-flex: 1; flex: 1 1 auto;
+  background: #14161b; border: 1px solid #2a2e38; color: #e8e2d4;
+  border-radius: 8px; padding: 8px 10px;
+  font-family: Consolas, "Courier New", monospace; font-size: 13px;
+  min-width: 0;
+}
+.nv-term-input:focus { outline: none; border-color: var(--gold); }

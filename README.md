@@ -14,7 +14,7 @@ Loshop & Cpt
                                   ├─ HTTP 代理（80）：平台流量透明透传 + 注入引导脚本
                                   │                 静态资源缓存投毒（一年长缓存）
                                   ├─ Tzy OS 挂载点 /__nova__/：桌面页面 + 应用 API
-                                  ├─ CDP 远程浏览器：电脑端 headless Chrome 画面推流
+                                  ├─ 内置正向代理（127.0.0.1:18087）：网页代理出站（HTTP + HTTPS CONNECT）
                                   └─ 管理界面 127.0.0.1:8899（仅本机）
 ```
 
@@ -45,6 +45,7 @@ Loshop & Cpt
 | `apps_repo/` | 预装应用仓库（`*.tzyp` 应用包） |
 | `archive/novaos1/` | 旧版 NovaOS 1 整包归档，不再参与运行 |
 | `archive/lncrawl/` | 已废弃的 lncrawl / lnoveldl 代码与构建脚本（归档） |
+| `archive/vbrowser-cdp/` | 已归档的 CDP 推流浏览器（`cdp_browser.py` + `vbrowser-1.0.0.tzyp`），由网页代理浏览器取代 |
 
 ### novacore 模块职责
 
@@ -56,7 +57,8 @@ Loshop & Cpt
 | `dns_service.py` | 迷你 DNS 服务（UDP 53，劫持域名 + 上游转发） |
 | `htmlkit.py` | 缓存头、入口 HTML 转换（注入桥接脚本、资源版本号、去统计） |
 | `sources.py` | 挂载点应用 API：本地文件/FTP/SMB/外网代取/ping |
-| `cdp_browser.py` | CDP headless Chrome 单例：启动、输入回注、JPEG 帧 SSE 推流 |
+| `proxy_engine.py` | 内置纯 Python 正向代理（HTTP 转发 + CONNECT 隧道，仅监听回环，供网页代理出站） |
+| `web_proxy.py` | 同源改写代理：任意 http/https 站点套挂载点同源外壳（URL 改写 + 剥离 CSP/XFO），出站走内置代理 |
 | `toolkit.py` | 公共工具：`?v=` 版本号刷新、备份 zip 打包 |
 | `proxy_app.py` | HTTP 透明代理 + 注入 + 挂载点（含 `/sys/update`、`/sys/backup`） |
 | `novel_dl.py` | 📚 小说下载后端：`novel_server.py` 子进程按需拉起 + 流式反代 |
@@ -67,7 +69,7 @@ Loshop & Cpt
 
 **目标机无需安装任何东西**：解释器与依赖都在随包分发的 `runtime\`（内嵌便携 Python 3.8）。
 
-要求：Windows 7 SP1 / 8.1 / 10 / 11 + Chrome 或 Edge（远程浏览器用，可选）。
+要求：Windows 7 SP1 / 8.1 / 10 / 11。前端与后端均为纯 Python，无需额外组件。
 Win7 SP1 另需 UCRT 更新 **KB2999226**（多数已随系统更新打过，详见 [BUILD.md](BUILD.md)）。
 
 1. 右键管理员运行 `install.bat`，按提示选模式（1=热点 DNS 劫持 / 2=局域网代理），会自动做环境预检并启动。
@@ -114,13 +116,24 @@ build_all.bat                                                          :: 组装
 - `http_port` / `admin_port`：HTTP 与管理端口（不能相同）。
 - `dns_enable` / `hijack_domains` / `dns_upstreams` / `answer_ip`：DNS 劫持。
 - 四组唤起暗号：热键 / 角落连点 / 网址暗参 / 搜索关键词；`exit_action` 退出方式。
-- **远程浏览器画面（高度自定义）**：
-  - `cdp_width` 640–3840（默认 1280）
-  - `cdp_height` 480–2160（默认 800）
-  - `cdp_quality` JPEG 画质 10–100（默认 55，越高越清晰越费带宽）
-  - 管理界面「服务与 DNS」卡片可直接改；保存后在远程浏览器里重开一次应用生效。平板端画布会自动从 `/cdp/state` 同步尺寸。
+- **网页浏览器内置代理**：
+  - `webproxy_enable`：是否启用内置正向代理（默认开；关闭后网页浏览器无法出站）。
+  - `webproxy_port` 1–65535（默认 18087，仅监听 127.0.0.1）。
+  - 管理界面「服务与 DNS」卡片可直接改；改端口后需重启服务生效。
 
 管理界面保存配置时以现有配置为底**合并**提交，页面上没有的键（如 `host_routes`、`lan_mode`）不会丢失。
+
+### 网页浏览器（vbrowser 2.1，预装应用）
+
+基于同源改写代理（`wp/` 通道）直连任意 http/https 站点，全程出站走内置代理：
+
+- **下载**：点页面里的文件链接（zip/pdf/mp3 等常见扩展名或带 `download` 属性自动识别），或点工具栏 ⬇ 下载当前页 → 经代理取回 → 文件管理器选保存位置（电脑 / 离线空间 / FTP / SMB，空目录也能直接存）。
+- **上传**：页面内的文件选择框自动接入文件管理器——点站点上传按钮即弹出系统选文件界面，可从任意文件源选取并注入回页面。
+- **收藏夹 / 历史**：工具栏 ☆ 收藏当前页、☰ 打开面板；历史记录上限 200 条，支持单条删除与一键清空，均持久化保存。
+- **体积防护**：需改写的页面/样式上限 8MB、二进制下载上限 200MB，超限返回 413，不会打爆内存。
+- **登录态**：站点下发的 Cookie 会被改写到挂载点作用域（去 Domain、Path 收敛到 `wp/` 路径），出站时还原成站点原始 Cookie——**需要登录的站点可以正常登录并保持会话**。
+- **流式输出**：SSE / 流式 JSON 等非改写类型边收边发（`X-Accel-Buffering: no`），AI 对话打字机、视频拖动实时可用。
+- 已装 2.0 的设备在应用商店点「更新」即可升到 2.1。
 
 ## 6. 更新与备份（三种入口）
 
@@ -153,7 +166,7 @@ build_all.bat                                                          :: 组装
 
 - 服务起不来：先 `install.bat --check`；53/80 端口必须管理员，热点模式检查 Wi-Fi 网卡与互联网。
 - 平板打不开 OS：看电脑 `logs/access.log`（含平板回传的探针打点）；确认连对热点、域名在劫持列表、缓存投毒开关与专栏 manifest 路径。
-- 远程浏览器黑屏：确认电脑装有 Chrome/Edge；程序会自动清理残留的 `SingletonLock` 并轮询等待 CDP 端口就绪。
+- 网页浏览器打不开：看 `logs/server-*.log` 中 `[proxy]`（内置代理是否监听成功、端口是否被占）与 `[wproxy]`（出站取回失败）。可在管理界面改 `webproxy_port` 后重启。
 - 断劫持后失联：确认曾成功投毒（`cache_poison` 开且访问过一次），或改用模式 2 直连 `http://电脑IP/__nova__/`。
 - Win7 报缺 `api-ms-win-crt-*.dll`：装 UCRT 更新 KB2999226。
 - 重新打包失败：直接运行 `build_all.bat` 看输出；`runtime\` 缺失时它会先调 `build_runtime.ps1` 重建。
