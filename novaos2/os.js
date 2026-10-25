@@ -180,8 +180,8 @@
    * 两者都同时作用于锁屏与桌面，保证切换后观感一致。 */
   var UI_KEY = "nova2.ui";
 
-  var OS_VERSION = "2.0.0";
-  var OS_BUILD = "20261024";
+  var OS_VERSION = "2.1.0";
+  var OS_BUILD = "20261025";
 
   var WALLPAPERS = [
     { id: 0, name: "石墨" },
