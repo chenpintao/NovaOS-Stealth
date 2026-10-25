@@ -63,7 +63,7 @@
     root.__state = state;
 
     root.style.cssText = "display:-webkit-flex;display:flex;-webkit-flex-direction:column;" +
-      "flex-direction:column;height:100%;background:#eceef2;";
+      "flex-direction:column;height:100%;background:var(--surface);";
 
     var bar = OS.h("div", "nv-toolbar");
     var tName = OS.h("span", "nv-crumbs", "文档查看");

@@ -24,7 +24,7 @@
       var busy = false;
 
       root.style.cssText = "display:-webkit-flex;display:flex;-webkit-flex-direction:column;" +
-        "flex-direction:column;height:100%;background:#f3f1f8;";
+        "flex-direction:column;height:100%;background:var(--paper);";
 
       /* ---------------- 顶栏 ---------------- */
       var bar = OS.h("div", "nv-toolbar");

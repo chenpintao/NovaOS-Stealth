@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>GeoGebra 几何</title>
+<style>
+  html, body { margin:0; height:100%; overflow:hidden; background:#20252d; }
+  #applet { position:absolute; inset:0; }
+  #tip {
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:8px;
+    font:14px/1.6 "Microsoft YaHei", sans-serif; color:#a3adbb;
+    background:#20252d; text-align:center; padding:24px; z-index:2;
+  }
+  #tip .sub { font-size:12px; color:#7b8593; }
+</style>
+</head>
+<body>
+<div id="applet"></div>
+<div id="tip"><div>正在加载几何引擎…</div><div class="sub">本地离线版</div></div>
+
+<script src="./deployggb.js?v=1792933000"></script>
+<script>
+(function () {
+  var tip = document.getElementById('tip');
+
+  // 本地资源根目录：本页所在目录，引擎从 web3d/ 读取
+  var codebase = new URL('./web3d/', location.href).href;
+
+  function fail(msg) {
+    tip.innerHTML = '<div>' + msg + '</div>' +
+      '<div class="sub">请确认应用已完整安装（需要 geogebra 资源目录）</div>';
+  }
+
+  try {
+    var params = {
+      appName: 'geometry',
+      width: window.innerWidth,
+      height: window.innerHeight,
+      showMenuBar: true,
+      showToolBar: true,
+      showAlgebraInput: true,
+      showResetIcon: true,
+      enableLabelDrags: true,
+      enableShiftDragZoom: true,
+      enableRightClick: false,
+      errorDialogsActive: false,
+      useBrowserForJS: false,
+      language: 'zh-CN',
+      appletOnLoad: function () {
+        tip.style.display = 'none';
+        try { window.dispatchEvent(new Event('resize')); } catch (e) { }
+      }
+    };
+
+    var applet = new GGBApplet(params, true);
+    // 关键：把引擎目录指向本地镜像，避免再走官网（首屏要几十秒）
+    applet.setHTML5Codebase(codebase);
+    applet.inject('applet');
+
+    // 兜底：10 秒仍未回调则给出提示（不阻断，引擎可能仍在解析）
+    setTimeout(function () {
+      if (tip.style.display !== 'none') {
+        tip.innerHTML = '<div>引擎仍在初始化…</div>' +
+          '<div class="sub">首次启动较慢，请稍候</div>';
+      }
+    }, 10000);
+  } catch (e) {
+    fail('几何引擎加载失败：' + (e && e.message ? e.message : e));
+  }
+
+  // 窗口尺寸变化时让引擎自适应。
+  // 注意：不能在这里再 dispatch 'resize'，否则形成
+  // resize → dispatch resize → resize 的无限递归（栈溢出）。
+  // GGBApplet 自身会监听窗口 resize，这里只做画布尺寸同步。
+})();
+</script>
+</body>
+</html>

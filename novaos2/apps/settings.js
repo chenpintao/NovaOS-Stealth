@@ -371,6 +371,165 @@
     });
     refreshUsage();
 
+    /* ---------- 存储占用（储存 / 总体） ----------
+     * 开关切换两种视图：
+     *   储存  —— 只列能精确算出的部分：OS 自己的键、宿主页面存储、离线空间文件
+     *   总体  —— 再加上浏览器给出的本源用量/配额，以及“未归因”的差值
+     * 环境探测结果（是否 WebView）单独一行展示，便于判断为何某些数值不可用。 */
+    var cardStore = OS.h("div", "nv-set-card");
+    cardStore.appendChild(OS.h("h4", "", "存储占用"));
+
+    var rowEnv = OS.h("div", "nv-set-row");
+    rowEnv.appendChild(OS.h("span", "nv-set-k", "运行环境"));
+    var vEnv = OS.h("span", "nv-set-v", "检测中…");
+    rowEnv.appendChild(vEnv);
+    cardStore.appendChild(rowEnv);
+
+    // 视图开关
+    var rowMode = OS.h("div", "nv-set-row");
+    rowMode.appendChild(OS.h("span", "nv-set-k", "统计范围"));
+    var modeBox = OS.h("span", "nv-set-v");
+    var segStore = OS.h("div", "nv-seg");
+    var bStorage = OS.h("button", "", "储存");
+    var bTotal = OS.h("button", "", "总体占用");
+    segStore.appendChild(bStorage);
+    segStore.appendChild(bTotal);
+    modeBox.appendChild(segStore);
+    rowMode.appendChild(modeBox);
+    cardStore.appendChild(rowMode);
+
+    var storeRows = {};
+    function addStoreRow(key, label) {
+      var row = OS.h("div", "nv-set-row");
+      row.appendChild(OS.h("span", "nv-set-k", label));
+      var v = OS.h("span", "nv-set-v", "—");
+      row.appendChild(v);
+      cardStore.appendChild(row);
+      storeRows[key] = { row: row, v: v };
+      return row;
+    }
+    addStoreRow("os", "系统自身");
+    addStoreRow("host", "原页面");
+    addStoreRow("vfs", "离线空间");
+    addStoreRow("origin", "本源总计");
+    addStoreRow("quota", "浏览器配额");
+    addStoreRow("unaccounted", "其他（缓存等）");
+
+    var barStore = OS.h("div", "nv-set-bar");
+    var barStoreFill = document.createElement("i");
+    barStoreFill.style.width = "0%";
+    barStore.appendChild(barStoreFill);
+    cardStore.appendChild(barStore);
+
+    var rowStoreHint = OS.h("div", "nv-set-hint", "");
+    cardStore.appendChild(rowStoreHint);
+
+    // 展开/收起明细
+    var rowStoreBtn = OS.h("div", "nv-set-row");
+    var spStore = OS.h("span", "nv-set-v");
+    var btnStoreRefresh = OS.h("button", "nv-btn", "重新检测");
+    spStore.appendChild(btnStoreRefresh);
+    rowStoreBtn.appendChild(spStore);
+    cardStore.appendChild(rowStoreBtn);
+
+    page.appendChild(cardStore);
+
+    var storeMode = "storage";
+
+    function setModeVisual() {
+      bStorage.className = storeMode === "storage" ? "on" : "";
+      bTotal.className = storeMode === "total" ? "on" : "";
+      // 总体视图才展示本源总计/配额/未归因
+      var showTotal = storeMode === "total";
+      ["origin", "quota", "unaccounted"].forEach(function (k) {
+        if (storeRows[k]) storeRows[k].row.style.display = showTotal ? "" : "none";
+      });
+    }
+
+    function renderStore(info, vfs) {
+      var env = info.env || {};
+      vEnv.textContent = (env.webview ? "WebView（" + env.name + "）" : (env.name || "浏览器")) +
+        (env.standalone ? " · 独立窗口" : "");
+      vEnv.title = navigator.userAgent || "";
+
+      var osBytes = (info.osTotal || 0);
+      setRow("os", fmtBytes(osBytes));
+      if (info.hostPage && info.hostPage.sameOrigin) {
+        var hb = info.hostPage.bytes || 0;
+        setRow("host", fmtBytes(hb) + "（" + (info.hostPage.keys || 0) + " 项）");
+        if (storeRows.host.row._tip) storeRows.host.row._tip.remove();
+      } else {
+        setRow("host", "不可读取");
+        storeRows.host.v.title = (info.hostPage && info.hostPage.reason) || "";
+      }
+      setRow("vfs", fmtBytes(vfs && vfs.bytes ? vfs.bytes : 0));
+
+      if (info.originUsage !== null && info.originUsage !== undefined) {
+        setRow("origin", fmtBytes(info.originUsage));
+      } else {
+        setRow("origin", "不可用");
+      }
+      if (info.originQuota) {
+        setRow("quota", fmtBytes(info.originQuota));
+      } else {
+        setRow("quota", "不可用");
+      }
+      if (info.unaccounted !== null && info.unaccounted !== undefined) {
+        setRow("unaccounted", fmtBytes(info.unaccounted));
+      } else {
+        setRow("unaccounted", "不可用");
+      }
+
+      // 进度条：总体视图看本源用量占配额，储存视图看 OS+宿主占配额
+      var quota = info.originQuota || 0;
+      var used = storeMode === "total"
+        ? (info.originUsage || 0)
+        : ((info.osTotal || 0) + (info.hostPage && info.hostPage.sameOrigin ? (info.hostPage.bytes || 0) : 0));
+      var pct = quota > 0 ? Math.max(0.4, Math.min(100, used / quota * 100)) : 0;
+      barStoreFill.style.width = pct.toFixed(1) + "%";
+
+      rowStoreHint.textContent = env.webview
+        ? "已识别为 WebView：本源用量由浏览器统计，包含系统缓存、离线空间与页面数据；" +
+          "浏览器不提供精确的“整机/整应用”占用，故只展示本源可确认的数值。"
+        : "未运行在 WebView 中：部分统计（如宿主页面存储）不可读取。";
+    }
+    function setRow(key, text) {
+      if (storeRows[key]) storeRows[key].v.textContent = text;
+    }
+
+    var storeBusy = false;
+    function refreshStore() {
+      if (storeBusy) return;
+      storeBusy = true;
+      btnStoreRefresh.disabled = true;
+      Object.keys(storeRows).forEach(function (k) { setRow(k, "统计中…"); });
+      // 复用离线空间统计，避免重复遍历文件
+      OS.vfs.usage().then(function (u) {
+        var vfs = (u && u.ok) ? u : { bytes: 0 };
+        return OS.storage(storeMode, vfs);
+      }).then(function (info) {
+        renderStore(info, info.vfs || {});
+      }, function (err) {
+        OS.logerr("storage", err, "存储统计失败");
+        rowStoreHint.textContent = "统计失败：" + ((err && err.message) || "未知原因");
+      }).then(function () {
+        storeBusy = false;
+        btnStoreRefresh.disabled = false;
+      });
+    }
+
+    bStorage.addEventListener("click", function () {
+      if (storeMode === "storage") return;
+      storeMode = "storage"; setModeVisual(); refreshStore();
+    });
+    bTotal.addEventListener("click", function () {
+      if (storeMode === "total") return;
+      storeMode = "total"; setModeVisual(); refreshStore();
+    });
+    btnStoreRefresh.addEventListener("click", refreshStore);
+    setModeVisual();
+    refreshStore();
+
     /* ---------- 系统维护（更新 / DevLink / 备份还原） ---------- */
     var cardSys = OS.h("div", "nv-set-card");
     cardSys.appendChild(OS.h("h4", "", "系统维护"));

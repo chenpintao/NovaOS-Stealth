@@ -37,23 +37,23 @@
 
     var wrap = OS.h("div", "nv-search");
     wrap.style.cssText = "position:absolute;top:0;left:0;right:0;bottom:0;" +
-      "display:flex;flex-direction:column;background:#f7f4ec;color:#24252a;";
+      "display:flex;flex-direction:column;background:var(--paper);color:var(--text);";
 
     /* ---------- 顶栏 ---------- */
     var bar = OS.h("div", "nv-search-bar");
     bar.style.cssText = "flex:0 0 auto;display:flex;align-items:center;gap:8px;" +
-      "padding:10px 12px;background:#23262e;color:#f2eee5;";
+      "padding:10px 12px;background:var(--surface);color:var(--text);";
     var title = OS.h("div", "", "🔎 智能搜索");
     title.style.cssText = "font-weight:600;margin-right:auto;";
     var status = OS.h("span", "", "就绪");
-    status.style.cssText = "font-size:11px;color:rgba(242,238,229,.65);";
+    status.style.cssText = "font-size:11px;color:var(--text-3);";
 
     // 模式切换
     var seg = OS.h("div", "nv-seg");
-    seg.style.cssText = "display:flex;border:1px solid #4a4f5c;border-radius:8px;overflow:hidden;";
+    seg.style.cssText = "display:flex;border:1px solid var(--line-strong);border-radius:var(--r-sm);overflow:hidden;";
     function modeBtn(key, label) {
       var b = OS.h("button", "", label);
-      b.style.cssText = "background:transparent;border:0;color:#f2eee5;padding:5px 10px;" +
+      b.style.cssText = "background:transparent;border:0;color:var(--text-2);padding:5px 10px;" +
         "font-size:12px;cursor:pointer;";
       b._key = key;
       b.addEventListener("click", function () { setMode(key); });
@@ -98,8 +98,9 @@
     var input = document.createElement("textarea");
     input.placeholder = "输入问题…（Enter 发送，Shift+Enter 换行）";
     input.rows = 1;
-    input.style.cssText = "flex:1;min-width:0;resize:none;border:1px solid #cfc6b5;" +
-      "border-radius:6px;padding:9px;font:14px sans-serif;background:#fff;";
+    input.style.cssText = "flex:1;min-width:0;resize:none;border:1px solid var(--line-strong);" +
+      "border-radius:var(--r-sm);padding:9px;font:14px sans-serif;" +
+      "background:var(--paper);color:var(--text);";
     var btnSend = OS.h("button", "nv-btn primary", "发送");
     composer.appendChild(input); composer.appendChild(btnSend);
     wrap.appendChild(composer);
@@ -141,9 +142,9 @@
       var mine = kind === "user";
       el.style.cssText = "max-width:86%;margin:8px 0;padding:10px 12px;" +
         "border-radius:" + (mine ? "12px 4px 12px 12px" : "4px 12px 12px 12px") + ";" +
-        "background:" + (mine ? "#c03f2d" : "#fff") + ";" +
-        "color:" + (mine ? "#fff" : "#24252a") + ";" +
-        "box-shadow:0 1px 2px rgba(45,35,20,.12);white-space:pre-wrap;" +
+        "background:" + (mine ? "var(--accent)" : "var(--surface)") + ";" +
+        "color:" + (mine ? "#fff" : "var(--text)") + ";" +
+        "box-shadow:var(--sh-1);white-space:pre-wrap;" +
         "word-break:break-word;line-height:1.55;" +
         (mine ? "margin-left:auto;" : "");
       el.textContent = esc(text);
@@ -312,7 +313,7 @@
         var mask = OS.h("div", "nv-mask nv-modal-top");
         var panel = OS.h("div", "");
         panel.style.cssText = "position:fixed;top:0;right:0;bottom:0;width:min(360px,88vw);" +
-          "background:#fbf9f4;box-shadow:-8px 0 30px rgba(0,0,0,.28);z-index:12000;" +
+          "background:var(--surface);box-shadow:var(--sh-3);z-index:12000;" +
           "display:flex;flex-direction:column;padding:16px;box-sizing:border-box;overflow:auto;";
         var head = OS.h("div", "");
         head.style.cssText = "display:flex;align-items:center;margin-bottom:12px;";
@@ -345,8 +346,8 @@
           i.type = type || "text";
           i.className = "nv-input";
           i.value = value == null ? "" : value;
-          i.style.cssText = "width:100%;box-sizing:border-box;padding:7px;border:1px solid #cfc6b5;" +
-            "border-radius:6px;background:#fff;";
+          i.style.cssText = "width:100%;box-sizing:border-box;padding:7px;border:1px solid var(--line-strong);" +
+            "border-radius:var(--r-sm);background:var(--paper);color:var(--text);";
           box.appendChild(l); box.appendChild(i);
           return { box: box, input: i };
         }

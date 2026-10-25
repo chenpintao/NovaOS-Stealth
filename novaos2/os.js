@@ -238,6 +238,173 @@
     applyWallpaper(idx, colors);
   }
 
+  /* ---------------- 存储占用探测 ----------------
+   * 目标：分别算出三类占用，并尽量探测 WebView 整体用量。
+   *   os       本 OS 自己写在 localStorage 的键（nova2.*）与 IndexedDB(nova2)
+   *   host     被劫持页面的 localStorage / sessionStorage（同源可直接读，
+   *            跨域只能靠父页面自己回报）
+   *   vfs      离线空间文件本身（IndexedDB blobs，已含在 os 的 IDB 里，
+   *            这里单独统计便于用户理解“我的文件占了多少”）
+   *   origin   整个源的 navigator.storage.estimate()（浏览器给出的总用量）
+   *   quota    浏览器配额
+   * 说明：WebView 的“总体占用”（含 HTTP 磁盘缓存、其他站点数据）浏览器
+   * 不提供精确接口，只能拿到本源的 usage/quota；其余以“无法精确读取”呈现，
+   * 不做假数据。 */
+  var STORAGE_ENV = null;   // 缓存一次环境探测结果
+
+  function detectWebViewEnv() {
+    var ua = navigator.userAgent || "";
+    var env = { webview: false, name: "浏览器", standalone: false, ios: false };
+    // 常见 WebView 标识
+    if (/\bwv\b/.test(ua) && /Android/i.test(ua)) { env.webview = true; env.name = "Android WebView"; }
+    else if (/Android/i.test(ua) && /Version\/\d+\.\d+/.test(ua) && !/Chrome\//.test(ua)) {
+      env.webview = true; env.name = "Android 内置浏览器";
+    }
+    if (/iPhone|iPad|iPod/i.test(ua)) {
+      env.ios = true;
+      // iOS 上除 Safari 外基本都是 WKWebView
+      if (!/Safari\//.test(ua)) { env.webview = true; env.name = "iOS WKWebView"; }
+    }
+    // 被注入环境特有标记：宿主页与本 iframe 同源，能读到注入期的键
+    try {
+      if (window.parent && window.parent !== window) env.webview = true;
+    } catch (e) { /* 跨域访问，仍是嵌入式环境 */ env.webview = true; }
+    try {
+      env.standalone = !!(window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) ||
+        !!navigator.standalone;
+    } catch (e) { }
+    return env;
+  }
+
+  function bytesOfString(str) {
+    if (!str) return 0;
+    try {
+      if (window.TextEncoder) return new TextEncoder().encode(str).length;
+    } catch (e) { }
+    return str.length * 2;   // 退化估算：UTF-16
+  }
+
+  // 统计某个 storage 对象的总字节与条目数
+  function measureStorage(store) {
+    var out = { bytes: 0, count: 0 };
+    if (!store) return out;
+    try {
+      for (var i = 0; i < store.length; i++) {
+        var k = store.key(i);
+        var v = store.getItem(k);
+        out.bytes += bytesOfString(k) + bytesOfString(v);
+        out.count++;
+      }
+    } catch (e) { }
+    return out;
+  }
+
+  // 读父页面（被劫持页面）的存储；同源成功，跨域返回 null 表示不可读
+  function measureHostPage() {
+    try {
+      var pw = window.parent;
+      if (!pw || pw === window) return { sameOrigin: false, reason: "非嵌入环境" };
+      var ls = pw.localStorage, ss = pw.sessionStorage;
+      var a = measureStorage(ls), b = measureStorage(ss);
+      return {
+        sameOrigin: true,
+        localStorage: a,
+        sessionStorage: b,
+        bytes: a.bytes + b.bytes,
+        keys: a.count + b.count
+      };
+    } catch (e) {
+      // 跨域：浏览器禁止读取，只能告知状态
+      return { sameOrigin: false, reason: "跨域受限，无法读取宿主页面存储" };
+    }
+  }
+
+  // 列出 IndexedDB 库名（佐证 OS 自身占用）。
+  // 注意：非安全上下文（http）下 databases() 可能永不回调，
+  // 因此必须加超时兜底，否则整个存储面板会卡在“统计中…”。
+  function measureIDB() {
+    return new Promise(function (resolve) {
+      if (typeof indexedDB === "undefined" || !indexedDB.databases) {
+        resolve({ supported: false, list: [] });
+        return;
+      }
+      var done = false;
+      function finish(v) { if (!done) { done = true; resolve(v); } }
+      var timer = setTimeout(function () { finish({ supported: false, list: [], timeout: true }); }, 1200);
+      var rq;
+      try { rq = indexedDB.databases(); }
+      catch (e) { clearTimeout(timer); finish({ supported: false, list: [] }); return; }
+      if (!rq || typeof rq !== "object") {
+        clearTimeout(timer); finish({ supported: false, list: [] }); return;
+      }
+      rq.onsuccess = function () {
+        clearTimeout(timer);
+        finish({ supported: true, list: (rq.result || []).map(function (d) {
+          return { name: d.name, version: d.version };
+        }) });
+      };
+      rq.onerror = function () { clearTimeout(timer); finish({ supported: false, list: [] }); };
+    });
+  }
+
+  // 汇总存储信息。vfsBytes 由调用方传入（离线空间统计较重，避免重复算）
+  function collectStorage(mode, vfsInfo) {
+    var env = STORAGE_ENV || (STORAGE_ENV = detectWebViewEnv());
+    var osLS = measureStorage(localStorage);
+    var host = measureHostPage();
+
+    // 只统计 OS 自己的键，便于与宿主页面区分
+    var osOnly = { bytes: 0, count: 0 };
+    try {
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (k && k.indexOf("nova2.") === 0) {
+          osOnly.bytes += bytesOfString(k) + bytesOfString(localStorage.getItem(k));
+          osOnly.count++;
+        }
+      }
+    } catch (e) { }
+
+    var base = {
+      env: env,
+      localStorage: osLS,
+      osLocalStorage: osOnly,
+      hostPage: host,
+      vfs: vfsInfo || null,
+      mode: mode || "storage"
+    };
+
+    var estimateP = Promise.resolve(null);
+    if (navigator.storage && navigator.storage.estimate) {
+      // 某些 WebView 里 estimate() 可能长期不返回，加超时避免面板卡死
+      estimateP = Promise.race([
+        navigator.storage.estimate().catch(function () { return null; }),
+        new Promise(function (r) { setTimeout(function () { r(null); }, 1500); })
+      ]);
+    }
+
+    return Promise.all([estimateP, measureIDB()]).then(function (parts) {
+      var est = parts[0], idb = parts[1];
+      base.originUsage = est && est.usage !== undefined ? est.usage : null;
+      base.originQuota = est && est.quota !== undefined ? est.quota : null;
+      if (est && est.usageDetails) base.usageDetails = est.usageDetails;
+      base.indexedDB = idb;
+
+      // 已归因的字节（能在页内精确算出的部分）
+      var accounted = osOnly.bytes + (host.sameOrigin ? host.bytes : 0);
+      base.accounted = accounted;
+      // 未归因 = 浏览器源总用量 - 已精确算出的部分（含 IDB、HTTP 缓存等）
+      base.unaccounted = (base.originUsage !== null)
+        ? Math.max(0, base.originUsage - accounted) : null;
+      if (vfsInfo && vfsInfo.bytes) {
+        base.osTotal = osOnly.bytes + vfsInfo.bytes;
+      } else {
+        base.osTotal = osOnly.bytes;
+      }
+      return base;
+    });
+  }
+
   var ui = {
     wallpapers: function () { return WALLPAPERS.slice(); },
     customId: function () { return CUSTOM_ID; },
@@ -269,7 +436,7 @@
     }
   };
 
-  /* ---------------- 网络层：同源 → 直连热点 IP，自动探测与故障转移 ----------------  /* ---------------- 网络层：同源 → 直连热点 IP，自动探测与故障转移 ----------------
+  /* ---------------- 网络层：同源 → 直连热点 IP，自动探测与故障转移 ----------------
    * 劫持在：同源相对路径 api/... 即达 server.py。
    * 断劫持：域名失效，但平板仍连着电脑热点 → 直连 http://192.168.137.1 挂载点
    *         （跨域，服务端已开 CORS + 预检），FTP/SMB/外网代取全部继续可用。
@@ -3317,8 +3484,12 @@
       mount: rec.root,
       width: sz.w,
       height: sz.h,
+      // 顶部留出状态栏（10px 外边距 + 40px 高 = 50px）。
+      // 传 top 让 WinBox 自己把拖动/最大化限制在这条线以下，
+      // 否则窗口能拖到状态栏底下，被它压住而无法操作。
+      top: 50,
       x: Math.max(8, Math.round((window.innerWidth - sz.w) / 2) + (n % 4) * 22 - 33),
-      y: Math.max(52, Math.round((window.innerHeight - sz.h) / 2) - 24 + (n % 4) * 18),
+      y: Math.max(60, Math.round((window.innerHeight - sz.h) / 2) - 24 + (n % 4) * 18),
       background: "#1a1d24",
       border: 0,
       onclose: function () {
@@ -3980,6 +4151,8 @@
       ui: ui,
       version: function () { return OS_VERSION; },
       build: function () { return OS_BUILD; },
+      // 存储占用探测：mode 传 "storage"（只看储存）/ "total"（含 WebView 总体）
+      storage: function (mode, vfsInfo) { return collectStorage(mode, vfsInfo); },
       dlg: dlg,
       toast: toast,
       on: on,

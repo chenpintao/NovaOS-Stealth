@@ -1321,7 +1321,7 @@
         var crumbs = OS.h("div", "nv-crumbs");
         crumbs.style.marginBottom = "8px";
         var listBox = OS.h("div", "nv-list");
-        listBox.style.cssText = "max-height:46vh;border:1px solid #e8e0cf;border-radius:10px;background:#fff;";
+        listBox.style.cssText = "max-height:46vh;border:1px solid var(--line);border-radius:var(--r-md);background:var(--paper);";
         var hint = OS.h("div", "nv-status-line", "");
         var actions = OS.h("div", "nv-dialog-actions");
         var btnCancel = OS.h("button", "nv-btn ghost", "取消");
@@ -1462,7 +1462,7 @@
           }); tabs.appendChild(b);
         });
         var crumbs2 = OS.h("div", "nv-crumbs"), box = OS.h("div", "nv-list");
-        box.style.cssText = "max-height:46vh;border:1px solid #e8e0cf;border-radius:10px;background:#fff;";
+        box.style.cssText = "max-height:46vh;border:1px solid var(--line);border-radius:var(--r-md);background:var(--paper);";
         var hint = OS.h("div", "nv-status-line", ""), actions = OS.h("div", "nv-dialog-actions");
         var cancel = OS.h("button", "nv-btn ghost", "取消"), ok = OS.h("button", "nv-btn primary", "复制到此目录");
         actions.appendChild(cancel); actions.appendChild(ok); dlg.appendChild(tabs); dlg.appendChild(crumbs2); dlg.appendChild(box); dlg.appendChild(hint); dlg.appendChild(actions);

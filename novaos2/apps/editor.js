@@ -78,8 +78,8 @@
     ta.style.cssText =
       "-webkit-box-flex:1;flex:1 1 auto;width:100%;border:none;outline:none;" +
       "resize:none;padding:14px 16px;font-size:15px;line-height:1.7;" +
-      "font-family:'Songti SC','STSong','SimSun',serif;color:#26282d;" +
-      "background:#fffdf8;-webkit-user-select:text;user-select:text;";
+      "color:var(--text);" +
+      "background:var(--paper);-webkit-user-select:text;user-select:text;";
 
     var statusLine = OS.h("div", "nv-status-line", "就绪");
 
