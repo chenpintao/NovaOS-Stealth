@@ -180,7 +180,7 @@
    * 两者都同时作用于锁屏与桌面，保证切换后观感一致。 */
   var UI_KEY = "nova2.ui";
 
-  var OS_VERSION = "2.2.0";
+  var OS_VERSION = "2.3.0";
   var OS_BUILD = "20261026";
 
   var WALLPAPERS = [
@@ -884,21 +884,33 @@
       };
     },
     // 内置应用静态站地址。
-    // 关键：这些页面（lib/mojuan、lib/quickdraw、lib/phigros）本身随系统分发，
-    // 是纯静态资源，离线也应能打开。因此先返回同源相对地址（等同当前 OS 的
-    // 挂载路径，浏览器直接读磁盘缓存），只有在“在线模式开启且电脑可达”时才
-    // 额外触发落库并优先用 apps_data 地址。
+    // 关键：这些页面（lib/mojuan、lib/quickdraw、lib/phigros、lib/geogebra）本身
+    // 随系统分发，是纯静态资源，离线也应能打开。
+    //
+    // 优先级（修复“缓存丢失后无法恢复”）：
+    //   1) 在线且电脑可达：调用 sys/app-data-ensure 让电脑端校验落库副本
+    //      （文件清单 + 大小），缺失/截断时整体重拷，再用 apps-data/<id>/
+    //      的真实磁盘地址加载。这样浏览器缓存被清理/损坏时也能自愈。
+    //   2) 离线或 ensure 失败：回退随系统分发的 lib/<id>/ 绝对地址，
+    //      依靠浏览器磁盘缓存打开（保持离线可用）。
     libAppUrl: function (id, page) {
       page = String(page || "index.html").replace(/^\/+/, "");
       var sub = page.split("/").map(encodeURIComponent).join("/");
-      // 统一返回随系统分发的 lib/<id>/ 绝对地址。
-      // 必须是绝对地址：应用入口脚本以 blob: 注入，相对路径会以 blob 为
-      // 基准解析成非法地址。
-      // 刻意不再切到 apps-data：落库副本依赖安装同步与磁盘状态，多一条
-      // 失败路径（曾出现只在某一路径白屏）。lib/ 随系统发布、已长缓存，
-      // 在线离线都稳定；apps-data 仅保留给 .tzyp 应用资源的 assetUrl。
       var origin = location.origin + (MOUNT_PATH || "/");
-      return Promise.resolve(origin + "lib/" + encodeURIComponent(id) + "/" + sub);
+      var libUrl = origin + "lib/" + encodeURIComponent(id) + "/" + sub;
+
+      function abs(base) {
+        return base ? (base + "apps-data/" + encodeURIComponent(id) + "/" + sub) : null;
+      }
+      if (!onlineEnabled()) return Promise.resolve(libUrl);
+      return netCall("sys/app-data-ensure", { id: id }).then(function (r) {
+        if (r && r.ok) {
+          if (NET.base) return abs(NET.base) || libUrl;
+          // 同源但探测已完成：用同源挂载路径
+          return origin + "apps-data/" + encodeURIComponent(id) + "/" + sub;
+        }
+        return libUrl;
+      }, function () { return libUrl; });
     },
     restoreCatalog: function () { return netCall("sys/restore-catalog", {}); },
     restorePackage: function (name) {
@@ -3590,6 +3602,12 @@
     setTimeout(function () { openApp(id, arg); }, 50);
   }
 
+  // 无未保存内容、可安全自动重建的应用：看门狗判定无响应时直接重建，
+  // 不弹“会丢失内容”的确认框，避免用户每次都要手动确认（Geo/Phi 白屏
+  // 场景下确认框重建后仍可能白屏，自动重建更可靠）。
+  var AUTO_HEAL_APPS = { geogebra: 1, phi: 1 };
+  var autoHealCounts = {};   // 跨重建保留的自动自愈次数（rec 会被重建替换）
+
   function appWatchdogTick() {
     runningList().forEach(function (id) {
       var rec = apps[id];
@@ -3598,7 +3616,23 @@
       pingApp(id).then(function (ok) {
         rec.healthPending = false;
         rec.healthMisses = ok ? 0 : (rec.healthMisses || 0) + 1;
-        if (ok || rec.healthMisses < 2 || appHealthPromptActive || !rec.win) return;
+        if (ok) autoHealCounts[id] = 0;
+        if (ok || rec.healthMisses < 2 || !rec.win) return;
+        if (AUTO_HEAL_APPS[id]) {
+          // 自动重建：连续失败有上限，避免“重建→仍白屏→再重建”死循环。
+          autoHealCounts[id] = (autoHealCounts[id] || 0) + 1;
+          if (autoHealCounts[id] <= 3) {
+            rec.healthMisses = 0;
+            nvLog("warn", "app", "自动重建无响应应用：" + id +
+              "（第 " + autoHealCounts[id] + " 次）");
+            rebuildApp(id);
+            return;
+          }
+          // 超过上限：退化为一次手动确认，并把计数清零，避免持续打扰
+          autoHealCounts[id] = 0;
+          rec.healthMisses = 2;
+        }
+        if (appHealthPromptActive) return;
         appHealthPromptActive = true;
         dlg.confirm("应用“" + rec.def.name + "”无响应，重建会丢失未保存内容，继续？", "应用无响应")
           .then(function (yes) {

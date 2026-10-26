@@ -67,6 +67,19 @@ input, textarea { -webkit-user-select: text; user-select: text; }
 .nv-hidden { display: none !important; }
 button { font-family: inherit; }
 
+/* 文字自适应兜底：按钮与表单控件默认不继承 color，各应用若只改了背景
+   会出现“黑底黑字/白底白字”。这里统一让它们跟随主题文本色，并把占位符
+   降为弱化色；各应用仍可用更具体的选择器覆盖。 */
+button, input, textarea, select {
+  font-family: inherit;
+  color: var(--text);
+}
+input::placeholder, textarea::placeholder { color: var(--text-3); opacity: 1; }
+input::-webkit-input-placeholder, textarea::-webkit-input-placeholder {
+  color: var(--text-3); opacity: 1;
+}
+button:disabled { color: var(--text-3); }
+
 /* ================= 壁纸 =================
    支持两类：内置预设（.nv-wp-N）与自定义渐变（.nv-wp-custom，
    两个色标由 os.js 写入 --wp-a / --wp-b）。 */

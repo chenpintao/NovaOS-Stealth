@@ -99,6 +99,55 @@
     });
   }
 
+  // 心跳：引擎就绪后周期性向父窗口报活。
+  // 注意：几何画板在空白时画布本来就是纯白，不能用“像素全白”判断白屏。
+  // 真正的引擎失效通常是：WebGL 上下文丢失、画布尺寸归零、或 GWT 定时器
+  // 停摆。这里用“画布有尺寸 + 上下文未丢失”作为存活判据，并监听
+  // webglcontextlost 事件，一旦丢失立即上报 dead 交由父窗口重建。
+  var hbTimer = null;
+  var deadStrikes = 0;
+  function contextLost(cv) {
+    try {
+      var gl = cv.getContext('webgl') || cv.getContext('experimental-webgl');
+      // getContext 在上下文已丢失时仍返回对象；用 isContextLost 判断
+      return !!(gl && gl.isContextLost && gl.isContextLost());
+    } catch (e) { return false; }
+  }
+  function startHeartbeat() {
+    if (hbTimer) return;
+    // 捕获 WebGL 上下文丢失：这是“画布还在但画面全白”的常见原因
+    try {
+      document.addEventListener('webglcontextlost', function () {
+        report('dead');
+      }, true);
+      // 画布尺寸归零（渲染异常）也视为异常
+      window.addEventListener('resize', function () { deadStrikes = 0; });
+    } catch (e) { }
+    hbTimer = setInterval(function () {
+      if (document.hidden) return;      // 后台不报活，避免误判
+      var alive = false;
+      try {
+        var cvs = document.querySelectorAll('#applet canvas');
+        for (var i = 0; i < cvs.length; i++) {
+          var cv = cvs[i];
+          if (!cv.width || !cv.height) continue;
+          if (cv.width < 2 || cv.height < 2) continue;
+          if (contextLost(cv)) continue;   // 该画布上下文丢失
+          alive = true;                    // 至少一块画布正常
+          break;
+        }
+      } catch (e) { alive = false; }
+      if (alive) { deadStrikes = 0; report('alive'); return; }
+      // 没有任何可用画布：连续 3 次判定失效，避免初始化瞬间误判
+      deadStrikes++;
+      if (deadStrikes >= 3) { deadStrikes = 0; report('dead'); }
+      else report('alive');
+    }, 2000);
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden && ready) { deadStrikes = 0; report('alive'); }
+    });
+  }
+
   function initEngine() {
     if (typeof window.GGBApplet !== 'function') {
       showRetry('几何引擎脚本未能加载（可能缓存缺失或离线）。');
@@ -123,6 +172,7 @@
           ready = true;
           tip.style.display = 'none';
           report('ready');
+          startHeartbeat();
           try { window.dispatchEvent(new Event('resize')); } catch (e) { }
         }
       };

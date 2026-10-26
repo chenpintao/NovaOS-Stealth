@@ -231,16 +231,26 @@ def create_proxy_app():
             # 自己的运行时代码。
             if is_retry_url:
                 resp.headers["Cache-Control"] = "no-cache"
-            elif entry_name.startswith("lib/phigros/"):
-                # phi 是 Vite 构建产物：内部 import 的 URL 由构建时写死，
-                # 来源「文件名 hash」或「作者手写的 ?v=」。两者都可能长期不变，
-                # 配合一年不回源 + 删掉 ETag，坏副本会被永久钉死（白屏）。
-                # 这里改用 conditional=True 做真正的条件请求：ETag 命中回
-                # 304（不重传正文），文件一变 ETag 就变，缓存最迟一天后失效。
-                # 注意不能用自定义 ETag 覆盖 Flask 生成的那个——协商是拿
+            elif entry_name.startswith("lib/"):
+                # lib/ 下是随系统分发的第三方应用静态站（phigros / geogebra /
+                # mojuan / quickdraw）。它们的内部引用 URL 由上游写死（文件名
+                # hash 或手写 ?v=），长期不变；若沿用一年不回源 + 删 ETag，
+                # 一旦某次返回了坏副本/半截响应，就会在磁盘缓存里被永久钉死，
+                # 表现为白屏或样式/组件丢失，重装应用也救不回（应用包不含
+                # 这些静态资源，重装不清浏览器缓存）。
+                #
+                # 改为真正的条件请求 + 受控 max-age：
+                #   · 每个文件保留 Flask 生成的 ETag，文件一变 ETag 即变；
+                #   · 入口 HTML 用 60 秒（改动后尽快生效）；
+                #   · 其余静态资源用 1 天（离线可用），过期后带 If-None-Match
+                #     回源校验：命中回 304（不重传正文），坏副本最迟一天后被
+                #     新副本替换，不再像过去那样被钉死一年。
+                # 注意：不能用自定义 ETag 覆盖 Flask 生成的那个——协商是拿
                 # 它自己的 ETag 做的，覆盖后反而不一致（永远 200）。
                 resp = send_file(fp, mimetype=ctype, conditional=True)
-                resp.headers["Cache-Control"] = "public, max-age=86400"
+                is_html = ctype in ("text/html", "application/xhtml+xml")
+                resp.headers["Cache-Control"] = ("public, max-age=60" if is_html
+                                                 else "public, max-age=86400")
             else:
                 apply_long_cache(resp)
         # blob 应用（origin=null）内 @font-face / fetch 与外层预取均依赖跨域许可
@@ -294,14 +304,15 @@ def create_proxy_app():
                 ctype = (mimetypes.guess_type(fp)[0] or
                          "application/octet-stream").split(";")[0].strip()
                 resp = send_file(fp, mimetype=ctype, conditional=True)
-                # 应用落库文件同样是离线可用的根基：长缓存（断网时可读磁盘
-                # 缓存）。no-cache 会导致离线打不开应用。这里不用
-                # apply_long_cache，因为它会删掉 ETag；保留 ETag 以便文件
-                # 更新后仍可条件校验（安装/升级会换 URL 或触发重拷）。
-                # 不使用 immutable：一旦某次返回过 404/半截内容，immutable
-                # 会让浏览器永久沿用坏副本，应用再也打不开。保留 ETag，
-                # 按 max-age 长缓存但仍可条件校验。
-                resp.headers["Cache-Control"] = "public, max-age=31536000"
+                # 应用落库文件同样是离线可用的根基。用“受控 max-age + ETag
+                # 条件校验”而非一年不回源：入口 HTML 60 秒、其余资源 1 天。
+                # 离线期内直接读磁盘副本；联网过期后带 If-None-Match 回源，
+                # 命中 304、文件变则 200 新副本。过去用一年（31536000）时，
+                # 一旦某次返回 404/半截内容，坏副本会被长期沿用，应用（如
+                # phi）样式/组件丢失且重建也无法恢复；现在最迟一天后自愈。
+                is_html = ctype in ("text/html", "application/xhtml+xml")
+                resp.headers["Cache-Control"] = ("public, max-age=60" if is_html
+                                                 else "public, max-age=86400")
                 resp.headers["X-Content-Type-Options"] = "nosniff"
                 # IP 直连时平板跨域引用这些文件（iframe/图片/fetch），需放行。
                 resp.headers["Access-Control-Allow-Origin"] = "*"
