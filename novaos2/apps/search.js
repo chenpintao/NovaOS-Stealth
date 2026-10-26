@@ -72,13 +72,13 @@
     /* ---------- AI 选项条 ---------- */
     var opts = OS.h("div", "");
     opts.style.cssText = "flex:0 0 auto;display:flex;align-items:center;gap:8px;" +
-      "padding:6px 12px;background:#efe9db;border-bottom:1px solid #ddd6c7;font-size:12px;color:#6f6857;";
+      "padding:6px 12px;background:var(--surface);border-bottom:1px solid var(--line);font-size:12px;color:var(--text-2);";
     var cbSearch = document.createElement("input");
     cbSearch.type = "checkbox";
     cbSearch.className = "nv-checkbox";
     var lblSearch = OS.h("span", "", "启用联网搜索");
     var hintAI = OS.h("span", "", "");
-    hintAI.style.cssText = "margin-left:auto;color:#9a9079;";
+    hintAI.style.cssText = "margin-left:auto;color:var(--text-3);";
     opts.appendChild(cbSearch); opts.appendChild(lblSearch); opts.appendChild(hintAI);
     wrap.appendChild(opts);
 
@@ -88,13 +88,13 @@
     wrap.appendChild(list);
 
     var empty = OS.h("div", "", "输入问题开始对话；搜索模式不调用 AI，直接返回来源摘要");
-    empty.style.cssText = "color:#9a9079;font-size:14px;text-align:center;margin-top:40px;";
+    empty.style.cssText = "color:var(--text-3);font-size:14px;text-align:center;margin-top:40px;";
     list.appendChild(empty);
 
     /* ---------- 输入区 ---------- */
     var composer = OS.h("div", "");
     composer.style.cssText = "flex:0 0 auto;display:flex;gap:8px;padding:10px;" +
-      "border-top:1px solid #ddd6c7;background:#eee8dc;";
+      "border-top:1px solid var(--line);background:var(--surface);";
     var input = document.createElement("textarea");
     input.placeholder = "输入问题…（Enter 发送，Shift+Enter 换行）";
     input.rows = 1;
@@ -124,8 +124,10 @@
     }
     function renderMode() {
       var ai = state.mode === "ai";
-      btnAI.style.background = ai ? "#c03f2d" : "transparent";
-      btnSearch.style.background = ai ? "transparent" : "#c03f2d";
+      btnAI.style.background = ai ? "var(--accent)" : "transparent";
+      btnAI.style.color = ai ? "#fff" : "var(--text-2)";
+      btnSearch.style.background = ai ? "transparent" : "var(--accent)";
+      btnSearch.style.color = ai ? "var(--text-2)" : "#fff";
       opts.style.display = ai ? "flex" : "none";
       cbSearch.checked = state.useSearch;
       hintAI.textContent = ai
@@ -154,10 +156,10 @@
     // 来源折叠块：默认折叠，点击标题展开
     function sourcesBlock(sources, engine, usedSearch) {
       var box = document.createElement("div");
-      box.style.cssText = "margin:2px 0 10px;font-size:12.5px;color:#6f6857;";
+      box.style.cssText = "margin:2px 0 10px;font-size:12.5px;color:var(--text-2);";
       var count = (sources || []).length;
       var head = document.createElement("div");
-      head.style.cssText = "cursor:pointer;user-select:none;color:#2f5d8a;" +
+      head.style.cssText = "cursor:pointer;user-select:none;color:var(--accent);" +
         "padding:4px 0;display:flex;align-items:center;gap:6px;";
       var arrow = OS.h("span", "", "▸");
       var label = "参考来源 · " + count + " 条" +
@@ -177,16 +179,16 @@
           a.href = s.url || "#";
           a.target = "_blank";
           a.rel = "noopener noreferrer";
-          a.style.cssText = "color:#2f5d8a;text-decoration:none;";
+          a.style.cssText = "color:var(--accent);text-decoration:none;";
           row.appendChild(a);
           if (s.domain) {
             var dom = OS.h("span", "", "  " + s.domain);
-            dom.style.cssText = "color:#a59c89;";
+            dom.style.cssText = "color:var(--text-3);";
             row.appendChild(dom);
           }
           if (s.snippet) {
             var sn = OS.h("div", "", s.snippet);
-            sn.style.cssText = "color:#8a8271;font-size:11.5px;margin-top:2px;";
+            sn.style.cssText = "color:var(--text-3);font-size:11.5px;margin-top:2px;";
             row.appendChild(sn);
           }
           bodyBox.appendChild(row);
@@ -323,7 +325,7 @@
         panel.appendChild(head);
 
         var info = OS.h("div", "");
-        info.style.cssText = "font-size:12px;color:#6f6857;line-height:1.7;margin-bottom:12px;";
+        info.style.cssText = "font-size:12px;color:var(--text-2);line-height:1.7;margin-bottom:12px;";
         function infoText(s) {
           return "状态：" + (s.ready ? "已就绪" : (s.enabled ? "已启用但配置不全" : "未启用")) +
             "\n模型：" + (s.model || "（未填写）") +
@@ -341,7 +343,7 @@
           var box = OS.h("div", "");
           box.style.cssText = "margin-bottom:10px;";
           var l = OS.h("div", "", label);
-          l.style.cssText = "font-size:12px;color:#817968;margin-bottom:4px;";
+          l.style.cssText = "font-size:12px;color:var(--text-2);margin-bottom:4px;";
           var i = document.createElement("input");
           i.type = type || "text";
           i.className = "nv-input";
@@ -368,7 +370,7 @@
         cbEnable.checked = !!st.enabled;
         var enableRow = OS.h("div", "");
         enableRow.style.cssText = "display:flex;align-items:center;gap:8px;margin:6px 0 14px;" +
-          "font-size:13px;color:#3a3b3f;";
+          "font-size:13px;color:var(--text);";
         enableRow.appendChild(cbEnable);
         enableRow.appendChild(OS.h("span", "", "启用云端 AI"));
         panel.appendChild(enableRow);
@@ -380,7 +382,7 @@
         panel.appendChild(actions);
 
         var tip = OS.h("div", "");
-        tip.style.cssText = "margin-top:10px;font-size:11.5px;color:#9a9079;line-height:1.6;";
+        tip.style.cssText = "margin-top:10px;font-size:11.5px;color:var(--text-3);line-height:1.6;";
         tip.textContent = "配置保存在电脑端 config.json；修改需输入口令。对话记录保存在本机。";
         panel.appendChild(tip);
 

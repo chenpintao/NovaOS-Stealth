@@ -448,7 +448,7 @@ button { font-family: inherit; }
   padding: 4px 9px; margin-left: 6px; cursor: pointer;
   color: var(--text-2);
 }
-.nv-row-act.danger { color: var(--danger); border-color: #f0c9c6; }
+.nv-row-act.danger { color: var(--danger); border-color: rgba(224, 72, 61, .45); }
 
 .nv-empty, .nv-loading {
   padding: 40px 20px; text-align: center;
@@ -675,7 +675,7 @@ button { font-family: inherit; }
 }
 .nv-calc-key:active { background: var(--surface-2); -webkit-transform: scale(.97); transform: scale(.97); }
 .nv-calc-key.fn { background: var(--surface); color: var(--text-2); font-size: 18px; }
-.nv-calc-key.op { background: var(--accent-weak); color: var(--accent); font-size: 24px; }
+.nv-calc-key.op { background: var(--accent-weak); color: #8fbdf0; font-size: 24px; }
 .nv-calc-key.eq {
   background: var(--accent); border-color: var(--accent); color: #fff;
 }
@@ -895,7 +895,7 @@ button { font-family: inherit; }
   padding: 8px 12px;
   gap: 10px;
   background: rgba(192, 63, 45, .08);
-  border-bottom: 1px solid #e6ddc8;
+  border-bottom: 1px solid var(--line);
   flex: none;
 }
 .nv-batch-count { font-size: 13px; color: var(--cinnabar); font-weight: 600; }
@@ -1166,11 +1166,12 @@ button { font-family: inherit; }
 }
 .nv-pv-doc h1, .nv-pv-doc h2, .nv-pv-doc h3 { margin: .8em 0 .4em; line-height: 1.4; }
 .nv-pv-doc p { margin: .45em 0; }
+.nv-pv-doc a { color: var(--accent); }
 .nv-pv-doc img { max-width: 100%; }
 .nv-pv-doc table { border-collapse: collapse; max-width: 100%; }
-.nv-pv-doc td, .nv-pv-doc th { border: 1px solid #c9cdd4; padding: 4px 10px; }
+.nv-pv-doc td, .nv-pv-doc th { border: 1px solid var(--line-strong); padding: 4px 10px; }
 .nv-pv-unsupported { text-align: center; padding-top: 70px; }
-.nv-pv-unsupported h3 { color: #b25d00; }
+.nv-pv-unsupported h3 { color: var(--warn); }
 .nv-pv-slides { max-width: 860px; margin: 0 auto; display: -webkit-flex;
   display: flex; -webkit-flex-direction: column; flex-direction: column; gap: 16px; }
 .nv-pv-slide {
@@ -1186,7 +1187,7 @@ button { font-family: inherit; }
 .nv-pv-img { display: block; max-width: 92%; margin: 10px auto 0; }
 .nv-pv-table { border-collapse: collapse; margin: 0 auto; background: var(--paper);
   font: 13px/1.5 "Microsoft YaHei", sans-serif; }
-.nv-pv-table td { border: 1px solid #c9cdd4; padding: 3px 10px; white-space: pre-wrap;
+.nv-pv-table td { border: 1px solid var(--line-strong); padding: 3px 10px; white-space: pre-wrap;
   max-width: 360px; vertical-align: top; }
 
 /* ============ 应用商店（store 应用 / .tzyp 包管理） ============ */
@@ -1200,7 +1201,7 @@ button { font-family: inherit; }
 .nv-store-tab.active { background: var(--accent); color: #fff; }
 .nv-store-view { -webkit-flex: 1 1 auto; flex: 1 1 auto; overflow: auto;
   -webkit-overflow-scrolling: touch; padding: 12px 14px; }
-.nv-store-hint { font-size: 12px; color: #8a849a; margin: 0 2px 10px; line-height: 1.6;
+.nv-store-hint { font-size: 12px; color: var(--text-3); margin: 0 2px 10px; line-height: 1.6;
   white-space: pre-wrap; }
 .nv-store-card { background: var(--paper); border-radius: var(--r-sm); padding: 12px 14px; margin-bottom: 10px;
   box-shadow: 0 1px 4px rgba(60,40,110,.08); }
@@ -1226,7 +1227,7 @@ button { font-family: inherit; }
 .nv-store-crumb { color: var(--accent); cursor: pointer; }
 .nv-store-local-list { background: var(--paper); border-radius: var(--r-sm); overflow: hidden; }
 .nv-store-row { display: -webkit-flex; display: flex; -webkit-align-items: center;
-  align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid #f0edf7;
+  align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line);
   cursor: pointer; font: 14px/1.4 "Microsoft YaHei", sans-serif; }
 .nv-store-row:active { background: var(--surface-2); }
 .nv-store-row.is-pkg { background: var(--surface); }

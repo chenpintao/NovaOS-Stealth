@@ -14,61 +14,158 @@
     background:#20252d; text-align:center; padding:24px; z-index:2;
   }
   #tip .sub { font-size:12px; color:#7b8593; }
+  #tip button {
+    margin-top:6px; padding:7px 16px; border:0; border-radius:4px;
+    background:#4a8fd6; color:#fff; font:inherit; font-size:13px; cursor:pointer;
+  }
+  #tip button:active { background:#3b7ab8; }
 </style>
 </head>
 <body>
 <div id="applet"></div>
 <div id="tip"><div>正在加载几何引擎…</div><div class="sub">本地离线版</div></div>
 
-<script src="./deployggb.js?v=1792933000"></script>
 <script>
 (function () {
+  "use strict";
   var tip = document.getElementById('tip');
+  var ready = false;
 
   // 本地资源根目录：本页所在目录，引擎从 web3d/ 读取
   var codebase = new URL('./web3d/', location.href).href;
 
-  function fail(msg) {
-    tip.innerHTML = '<div>' + msg + '</div>' +
-      '<div class="sub">请确认应用已完整安装（需要 geogebra 资源目录）</div>';
+  // 重试时带上的时间戳：让 deployggb.js 与引擎脚本都绕过可能存在的坏缓存。
+  // 页面本身通过 location.replace('?geo_retry=...') 重载，这里从 URL 继承。
+  var retryTag = (function () {
+    var m = /[?&]geo_retry=([^&]+)/.exec(location.search || '');
+    return m ? m[1] : '';
+  })();
+
+  // 把加载状态告诉外层 OS（应用 iframe 的父窗口）。
+  // 外层据此实现健康检查与失败重试，避免“初始化中”永久卡死。
+  function report(state, msg) {
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ t: 'nv-geo-status', state: state, msg: msg || '' }, '*');
+      }
+    } catch (e) { }
   }
 
-  try {
-    var params = {
-      appName: 'geometry',
-      width: window.innerWidth,
-      height: window.innerHeight,
-      showMenuBar: true,
-      showToolBar: true,
-      showAlgebraInput: true,
-      showResetIcon: true,
-      enableLabelDrags: true,
-      enableShiftDragZoom: true,
-      enableRightClick: false,
-      errorDialogsActive: false,
-      useBrowserForJS: false,
-      language: 'zh-CN',
-      appletOnLoad: function () {
-        tip.style.display = 'none';
-        try { window.dispatchEvent(new Event('resize')); } catch (e) { }
-      }
-    };
-
-    var applet = new GGBApplet(params, true);
-    // 关键：把引擎目录指向本地镜像，避免再走官网（首屏要几十秒）
-    applet.setHTML5Codebase(codebase);
-    applet.inject('applet');
-
-    // 兜底：10 秒仍未回调则给出提示（不阻断，引擎可能仍在解析）
-    setTimeout(function () {
-      if (tip.style.display !== 'none') {
-        tip.innerHTML = '<div>引擎仍在初始化…</div>' +
-          '<div class="sub">首次启动较慢，请稍候</div>';
-      }
-    }, 10000);
-  } catch (e) {
-    fail('几何引擎加载失败：' + (e && e.message ? e.message : e));
+  function showRetry(msg) {
+    report('error', msg);
+    tip.innerHTML = '';
+    var line = document.createElement('div');
+    line.textContent = msg;
+    var sub = document.createElement('div');
+    sub.className = 'sub';
+    sub.textContent = '可重试；若反复失败，请确认应用资源完整或重新安装。';
+    var btn = document.createElement('button');
+    btn.textContent = '重试加载';
+    btn.addEventListener('click', function () {
+      // 加时间戳绕过可能存在的坏缓存副本
+      var u = location.pathname + '?geo_retry=' + Date.now();
+      location.replace(u);
+    });
+    tip.appendChild(line); tip.appendChild(sub); tip.appendChild(btn);
+    tip.style.display = 'flex';
   }
+
+  // ---- 动态加载 deployggb.js：重试时追加时间戳，绕过坏缓存副本 ----
+  function loadDeploy(cb, onErr) {
+    var s = document.createElement('script');
+    var base = './deployggb.js?v=1792933000';
+    s.src = retryTag ? (base + '&geo_retry=' + encodeURIComponent(retryTag)) : base;
+    s.onload = cb;
+    s.onerror = function () { onErr && onErr(); };
+    document.head.appendChild(s);
+  }
+
+  // 重试时用 cache:'reload' 预热关键引擎脚本，避免继续使用坏缓存。
+  function warmEngine(cb) {
+    if (!retryTag || typeof fetch !== 'function') { cb(); return; }
+    var files = ['web3d.nocache.js' + '?geo_retry=' + encodeURIComponent(retryTag)];
+    var done = 0;
+    var failed = false;
+    files.forEach(function (name) {
+      fetch(codebase + name, { cache: 'reload' }).then(function (r) {
+        if (!r.ok) failed = true;
+      }, function () { failed = true; }).then(function () {
+        done++;
+        if (done === files.length) {
+          if (failed) showRetry('几何引擎资源缺失（可能离线或缓存缺失）。');
+          else cb();
+        }
+      });
+    });
+  }
+
+  function initEngine() {
+    if (typeof window.GGBApplet !== 'function') {
+      showRetry('几何引擎脚本未能加载（可能缓存缺失或离线）。');
+      return;
+    }
+    try {
+      var params = {
+        appName: 'geometry',
+        width: window.innerWidth,
+        height: window.innerHeight,
+        showMenuBar: true,
+        showToolBar: true,
+        showAlgebraInput: true,
+        showResetIcon: true,
+        enableLabelDrags: true,
+        enableShiftDragZoom: true,
+        enableRightClick: false,
+        errorDialogsActive: false,
+        useBrowserForJS: false,
+        language: 'zh-CN',
+        appletOnLoad: function () {
+          ready = true;
+          tip.style.display = 'none';
+          report('ready');
+          try { window.dispatchEvent(new Event('resize')); } catch (e) { }
+        }
+      };
+
+      var applet = new GGBApplet(params, true);
+      // 关键：把引擎目录指向本地镜像，避免再走官网（首屏要几十秒）
+      applet.setHTML5Codebase(codebase);
+      applet.inject('applet');
+
+      // 引擎脚本（web3d.nocache.js / *.cache.js）加载失败会走这里：
+      // GWT 的模块脚本 onerror 不总是冒泡，因此用捕获阶段监听兜底。
+      window.addEventListener('error', function (evt) {
+        if (ready) return;
+        var tag = evt && evt.target;
+        if (tag && tag.tagName === 'SCRIPT') {
+          showRetry('几何引擎脚本加载失败（' + (tag.src || '').split('/').pop() + '）。');
+        }
+      }, true);
+      window.onerror = function (msg) {
+        if (!ready) showRetry('几何引擎加载出错：' + String(msg).slice(0, 120));
+      };
+
+      // 兜底提示：引擎解析较慢时先说明，超过 20 秒仍未就绪则判定失败，
+      // 给出可点击的重试按钮（不再无限“初始化中”）。
+      setTimeout(function () {
+        if (!ready) {
+          tip.innerHTML = '<div>引擎仍在初始化…</div>' +
+            '<div class="sub">首次启动较慢，请稍候</div>';
+        }
+      }, 8000);
+      setTimeout(function () {
+        if (!ready) showRetry('几何引擎加载超时。');
+      }, 20000);
+    } catch (e) {
+      showRetry('几何引擎加载失败：' + (e && e.message ? e.message : e));
+    }
+  }
+
+  loadDeploy(function () {
+    warmEngine(initEngine);
+  }, function () {
+    showRetry('几何引擎脚本未能加载（可能缓存缺失或离线）。');
+  });
 
   // 窗口尺寸变化时让引擎自适应。
   // 注意：不能在这里再 dispatch 'resize'，否则形成

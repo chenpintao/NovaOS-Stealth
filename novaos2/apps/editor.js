@@ -59,7 +59,7 @@
     var btnDel = OS.h("button", "nv-btn", "删除");
 
     var remoteBadge = OS.h("span", "nv-crumbs", "");
-    remoteBadge.style.color = "#b0463c";
+    remoteBadge.style.color = "var(--danger)";
     remoteBadge.style.display = "none";
 
     bar.appendChild(btnNew);
