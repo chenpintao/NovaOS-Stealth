@@ -180,8 +180,8 @@
    * 两者都同时作用于锁屏与桌面，保证切换后观感一致。 */
   var UI_KEY = "nova2.ui";
 
-  var OS_VERSION = "2.3.0";
-  var OS_BUILD = "20261026";
+  var OS_VERSION = "2.3.1";
+  var OS_BUILD = "20261027";
 
   var WALLPAPERS = [
     { id: 0, name: "石墨" },
@@ -1348,6 +1348,94 @@
         });
       }
 
+      case "watchdog": {
+        /* 看门狗快照（__boot__.snapshot.js）维护。
+         * 它是断劫持/断网后唯一能把 OS 拉起来的磁盘凭据，必须始终长缓存、
+         * 每次联网刷新、绝不被清理；OS 本体坏了可以重拉，看门狗丢了就起不来。
+         *
+         * op：
+         *   status   报告快照可达性/缓存头/大小（HEAD 探测，不写缓存）
+         *   refresh  让宿主父页面立即刷新快照（postMessage→loader，写父页面分区）
+         *   verify   拉一次并校验是合法脚本（非 CDN 错误页/半截）
+         *   url      打印快照地址
+         *
+         * 注意：OS 在 iframe 里，Chrome 双键缓存按 (顶级站,帧站) 分区，
+         * 在 iframe 内 fetch 快照不会写进启动时用的父页面分区；因此
+         * refresh 必须通过 loader 在宿主页面执行。 */
+        var wop = String(args.op || "status");
+        var snapUrl = (function () {
+          try { return location.origin + (MOUNT_PATH || "/") + "__boot__.snapshot.js"; }
+          catch (e) { return (MOUNT_PATH || "/") + "__boot__.snapshot.js"; }
+        })();
+        if (wop === "url") return { url: snapUrl };
+
+        function askHostRefresh() {
+          var tok = "";
+          try { tok = String(window.__NVA_TOKEN__ || ""); } catch (e) { tok = ""; }
+          try {
+            if (window.parent && window.parent !== window) {
+              window.parent.postMessage({ t: "nva-host-watchdog", k: tok, from: "nova-os" }, "*");
+              return true;
+            }
+          } catch (e) { }
+          return false;
+        }
+
+        if (wop === "refresh") {
+          var okHost = askHostRefresh();
+          // 兜底：即使不在宿主 iframe（独立调试），也在本上下文刷新一次
+          var localOK = false;
+          try {
+            fetch(snapUrl, { cache: "reload" }).then(function (r) { localOK = !!(r && r.ok); }, function () { });
+          } catch (e) { }
+          return {
+            ok: okHost, host: okHost,
+            note: okHost ? "已请求宿主页面刷新看门狗快照（后台执行，稍后可 watchdog status 复核）"
+                         : "当前不在宿主 iframe 中，已尝试在本上下文刷新"
+          };
+        }
+
+        if (wop === "verify") {
+          return fetch(snapUrl, { cache: "reload" }).then(function (r) {
+            if (!r) return { ok: false, error: "无响应" };
+            return r.text().then(function (t) {
+              // 合法快照应是 JS 脚本：含 __nvaBoot / __boot__.js 或 __STEALTH_CFG__
+              var looksJs = /__nvaBoot|__boot__|__STEALTH_CFG__|__novaStealth/.test(t);
+              return {
+                ok: r.ok && looksJs,
+                status: r.status,
+                bytes: t.length,
+                js: looksJs,
+                cc: r.headers.get("cache-control") || "",
+                note: r.ok && looksJs ? "快照内容合法" :
+                  (looksJs ? "HTTP 异常" : "返回的不是我们的脚本（疑似 CDN 错误页/半截），未覆盖旧快照")
+              };
+            });
+          });
+        }
+
+        // status：HEAD 探测 + 读到宿主节流打点（同源时本地可见），不写缓存
+        return fetch(snapUrl, { method: "HEAD", cache: "no-store" }).then(function (r) {
+          var at = 0;
+          try { at = parseInt(Store.get("__nvaSnapAt", 0), 10) || 0; } catch (e) { }
+          var cc = r ? (r.headers.get("cache-control") || "") : "";
+          var longCached = /max-age=(31536000|[1-9]\d{6,})/.test(cc);
+          return {
+            url: snapUrl,
+            reachable: !!(r && r.ok),
+            status: r ? r.status : 0,
+            bytes: r ? Number(r.headers.get("content-length") || 0) || null : null,
+            cc: cc,
+            longCached: longCached,
+            lastRefreshAt: at || null,
+            ageSec: at ? Math.round((Date.now() - at) / 1000) : null,
+            note: "快照须长缓存；断网后靠它启动。refresh 由宿主分区写入；lastRefreshAt 仅同源可见"
+          };
+        }, function (e) {
+          return { url: snapUrl, reachable: false, error: String(e && e.message || e) };
+        });
+      }
+
       case "dump": {
         // 一次性导出修复用的快照：系统信息 + 存储键 + 已装应用 + 后端状态
         return Promise.resolve(
@@ -1404,7 +1492,7 @@
       }
 
       default:
-        return { error: "未知命令：" + cmd + "（ping/info/eval/storage/vfs/app/toast/lock/reload/dbg/emit/cache/appreset/netreset/sysreset/forcerefresh/dump/hostpage）" };
+        return { error: "未知命令：" + cmd + "（ping/info/eval/storage/vfs/app/toast/lock/reload/dbg/emit/cache/appreset/netreset/sysreset/forcerefresh/dump/hostpage/watchdog）" };
     }
   }
 

@@ -351,7 +351,36 @@
         shown = false;
         poke("hide");
     }
+    /* 看门狗快照刷新（每次联网）：
+     * __boot__.snapshot.js 是断劫持/断网后唯一能把 OS 拉起来的凭据（见 boot-stub）。
+     * loader 在宿主父页面运行，与 boot-stub 处在同一缓存分区；这里在每次
+     * online 时再补刷一次，双保险。绝不删除、绝不 no-store —— 快照必须始终
+     * 以长缓存留在磁盘里；OS 本体（nova.html/os.js）坏了可以重新拉取，
+     * 看门狗丢了就再也起不来了。 */
+    function warmWatchdogSnapshot() {
+        try {
+            if (navigator.onLine === false) return;
+            var url = walkWatchdogBase() + "__boot__.snapshot.js";
+            fetch(url, { cache: "reload" }).then(function (r) {
+                dbg("watchdog snapshot refresh", r && r.status);
+            }, function () { });
+        } catch (e) { }
+    }
+    // 快照所在的基址：优先 loader 自身来源（与注入点同源的分区内），
+    // 退化到挂载点。不能用 storedBase()（那是 iframe 的直连基址），
+    // 因为 boot-stub 的快照写入的是「父页面」缓存分区。
+    function walkWatchdogBase() {
+        var origin = "";
+        try {
+            origin = (window.location && window.location.origin) || "";
+            // file:/about: 等场景 origin 为 "null"，不可用作快照基址
+            if (!/^https?:\/\//i.test(origin)) origin = "";
+        } catch (e) { origin = ""; }
+        return (origin || serveOrigin()) + mountPath();
+    }
     window.addEventListener("online", function () {
+        // 每次联网都刷新看门狗快照，保证离线兜底始终新鲜。
+        warmWatchdogSnapshot();
         if (shown && !osReady) armWatchdog();
     });
     function toggle() {
@@ -431,6 +460,10 @@
         else if (d.t === "nva-host-reload") recoverOS();
         else if (d.t === "nva-host-show") show();
         else if (d.t === "nva-host-hide") hide();
+        // 维护终端 → 宿主：立即刷新看门狗快照（forcereload 写入本分区磁盘缓存）。
+        // 必须由宿主父页面执行：Chrome 双键缓存按 (顶级站, 帧站) 分区，
+        // OS iframe 内自取不会写进启动时用的父页面分区。
+        else if (d.t === "nva-host-watchdog") warmWatchdogSnapshot();
     });
 
     /* 冻结宿主页面：停掉 CSS 动画/过渡、锁滚动。

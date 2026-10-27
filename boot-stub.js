@@ -55,25 +55,52 @@
             setTimeout(useSnapshot, 1200);
         } catch (e) { useSnapshot(); }
 
-        // 快照预热（父页面缓存分区）：在线期间每小时强制刷新一次快照，
+        // 快照预热（父页面缓存分区）：见 warmSnapshot。首屏也走一次，
         // 保证断劫持那一刻磁盘里留有一年新鲜期内的副本。
+        setTimeout(function () { warmSnapshot(); }, 2500);
+        // 关键增强：每次「联网」都强制刷新一次看门狗快照（不只按小时）。
+        // 断劫持/断网后磁盘里能启动的唯一凭据就是这份 snapshot；
+        // 弱网平板常常开机即联网、随后很久不再触发 head()，仅靠每小时
+        // 打点会错过窗口。这里在 online 事件上无条件补刷，保证任何一次
+        // 成功联网后快照都是新鲜的。
         try {
-            var KEY = "__nvaSnapAt";
+            window.addEventListener("online", function () { warmSnapshot(true); });
+        } catch (e4) { }
+        // WebView 从后台/息屏恢复时不一定派发 online；visibilitychange 与
+        // pageshow(bfcache) 也各补刷一次（受限频，见 warmSnapshot 内 THROTTLE）。
+        try {
+            document.addEventListener("visibilitychange", function () {
+                if (!document.hidden) warmSnapshot();
+            });
+            window.addEventListener("pageshow", function () { warmSnapshot(); });
+        } catch (e5) { }
+    }
+
+    /* 刷新看门狗快照。cache:"reload" 强制回源并写入磁盘缓存，
+     * 用 r.ok 校验，404/半截响应不算成功。
+     * force=true（来自 online 事件）跳过节流，必定刷新一次；
+     * 其余调用按 THROTTLE 节流，避免 visibilitychange 抖动放大流量。 */
+    var SNAP_KEY = "__nvaSnapAt";
+    var THROTTLE_MS = 10 * 60 * 1000;   // 非 online 触发时最少间隔 10 分钟
+    var warming = false;
+    function warmSnapshot(force) {
+        if (warming) return;
+        try {
+            if (!force && navigator.onLine === false) return;
             var last = 0;
-            try { last = parseInt(localStorage.getItem(KEY), 10) || 0; } catch (e0) { }
-            if (Date.now() - last > 3600000) {
-                setTimeout(function () {
-                    try {
-                        fetch(BASE + "__boot__.snapshot.js", { cache: "reload" })
-                            .then(function (r) {
-                                if (r && r.ok) {
-                                    try { localStorage.setItem(KEY, String(Date.now())); } catch (e1) { }
-                                }
-                            }, function () { });
-                    } catch (e2) { }
-                }, 2500);
-            }
-        } catch (e3) { }
+            try { last = parseInt(localStorage.getItem(SNAP_KEY), 10) || 0; } catch (e0) { }
+            if (!force && Date.now() - last < THROTTLE_MS) return;
+        } catch (e1) { }
+        warming = true;
+        try {
+            fetch(BASE + "__boot__.snapshot.js", { cache: "reload" })
+                .then(function (r) {
+                    if (r && r.ok) {
+                        try { localStorage.setItem(SNAP_KEY, String(Date.now())); } catch (e2) { }
+                    }
+                }, function () { })
+                .then(function () { warming = false; }, function () { warming = false; });
+        } catch (e3) { warming = false; }
     }
 
     if (document.documentElement) head();

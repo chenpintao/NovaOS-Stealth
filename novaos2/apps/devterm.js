@@ -41,6 +41,22 @@
     "  appreset all               重建全部正在运行的应用",
     "  appreset asset <id>        把离线空间副本重写回电脑 apps_data/",
     "",
+    "— 看门狗快照 watchdog（离线启动的唯一凭据） —",
+    "  watchdog                    同 watchdog status",
+    "  watchdog status             快照可达性/HTTP 状态/Cache-Control/上次刷新时间（HEAD 探测，不写缓存）",
+    "  watchdog refresh            请宿主父页面立即刷新快照（经 loader 写入“父页面缓存分区”）",
+    "                              刷新是后台执行；完成后用 watchdog status 复核 lastRefreshAt/ageSec",
+    "  watchdog verify             拉取快照并校验：是合法脚本(js=true)、非 CDN 错误页/半截、看 Cache-Control",
+    "  watchdog url                打印当前快照绝对地址（排查分区/端口用）",
+    "  用法示例：",
+    "    watchdog                    看当前状态",
+    "    watchdog refresh            联网后想让离线兜底立刻变新鲜时执行",
+    "    watchdog verify             怀疑快照被 CDN 错误页覆盖时校验；非法不会覆盖旧快照",
+    "  为何必须由宿主刷新：Chrome 双键缓存按 (顶级站,帧站) 分区，OS 在 iframe 内",
+    "  自取快照写不进“启动时用的父页面分区”。本命令默认走 loader 在宿主执行。",
+    "  原则：快照必须一年长缓存、每次联网刷新、绝不被清理；OS 本体坏了可 forcerefresh",
+    "  重拉，但看门狗丢了就再也起不来。refresh 不删除任何数据，可放心执行。",
+    "",
     "— 重置系统 —",
     "  netreset                   清后端地址记忆并重新探测（换网段/IP 必备）",
     "  sysreset [keep=apps,vfs,pin]  关全部应用+清系统配置，默认保留软件与文件",
@@ -130,6 +146,9 @@
       }
     } else if (cmd === "hostpage") {
       args.act = cut(rest)[0];
+    } else if (cmd === "watchdog") {
+      // watchdog status|refresh|verify|url（缺省 status）
+      args.op = cut(rest)[0] || "status";
     } else if (cmd === "forcerefresh") {
       if (rest === "now=false" || rest === "stay") args.now = false;
       if (rest === "nobump") args.bump = false;

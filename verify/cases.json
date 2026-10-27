@@ -80,5 +80,15 @@
     "id": "T16_phi_white",
     "title": "phi 白屏回归：interact.js 版本号随文件变化，加载完整",
     "timeout": 180
+  },
+  {
+    "id": "T17_watchdog_refresh",
+    "title": "看门狗快照每次联网刷新：online→强制reload快照；快照始终长缓存可离线",
+    "timeout": 180
+  },
+  {
+    "id": "T18_watchdog_cmds",
+    "title": "维护终端 watchdog 指令：url/status/verify/refresh，负控拒绝 CDN 错误页",
+    "timeout": 180
   }
 ]
